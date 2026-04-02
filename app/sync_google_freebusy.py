@@ -36,6 +36,10 @@ def _mark_run() -> None:
     SYNC_STATE_PATH.write_text(json.dumps(payload, ensure_ascii=True), encoding="utf-8")
 
 
+def _parse_google_event_time(raw_value: str) -> datetime:
+    return datetime.fromisoformat(raw_value.replace("Z", "+00:00")).astimezone(timezone.utc)
+
+
 def run() -> None:
     if settings.google_credentials_json.strip() == "" or settings.google_calendar_ids.strip() == "":
         print("Google env fallback active")
@@ -51,6 +55,16 @@ def run() -> None:
         return
 
     calendar_sources = sync_config.get("calendar_sources", []) if isinstance(sync_config.get("calendar_sources", []), list) else []
+    calendar_source_map = {}
+    if isinstance(calendar_sources, list):
+        for source in calendar_sources:
+            if not isinstance(source, dict):
+                continue
+            calendar_id = str(source.get("calendar_id", "")).strip()
+            if calendar_id == "":
+                continue
+            calendar_source_map[calendar_id] = source
+
     configured_calendar_ids = [
         str(item.get("calendar_id", "")).strip()
         for item in calendar_sources
@@ -100,14 +114,69 @@ def run() -> None:
                 if not start_raw or not end_raw:
                     continue
 
-                start_utc = datetime.fromisoformat(start_raw.replace("Z", "+00:00")).astimezone(timezone.utc)
-                end_utc = datetime.fromisoformat(end_raw.replace("Z", "+00:00")).astimezone(timezone.utc)
+                start_utc = _parse_google_event_time(start_raw)
+                end_utc = _parse_google_event_time(end_raw)
                 if end_utc <= start_utc:
                     continue
 
                 db.add(
                     BusyBlock(
                         source=f"google:{calendar_id}",
+                        start_utc=start_utc,
+                        end_utc=end_utc,
+                        fetched_at_utc=fetched_at,
+                    )
+                )
+
+        # Holiday calendars are treated as hard blockers by importing event ranges directly.
+        for calendar_id, source in calendar_source_map.items():
+            if str(source.get("calendar_type", "general")).strip().lower() != "holiday":
+                continue
+
+            events_result = (
+                service.events()
+                .list(
+                    calendarId=calendar_id,
+                    timeMin=now_utc.isoformat(),
+                    timeMax=max_utc.isoformat(),
+                    singleEvents=True,
+                    orderBy="startTime",
+                )
+                .execute()
+            )
+
+            for item in events_result.get("items", []) if isinstance(events_result, dict) else []:
+                if not isinstance(item, dict):
+                    continue
+
+                start_data = item.get("start", {})
+                end_data = item.get("end", {})
+                if not isinstance(start_data, dict) or not isinstance(end_data, dict):
+                    continue
+
+                start_raw = str(start_data.get("dateTime") or "").strip()
+                end_raw = str(end_data.get("dateTime") or "").strip()
+
+                if start_raw == "" or end_raw == "":
+                    start_date = str(start_data.get("date") or "").strip()
+                    end_date = str(end_data.get("date") or "").strip()
+                    if start_date == "" or end_date == "":
+                        continue
+                    start_raw = f"{start_date}T00:00:00+00:00"
+                    end_raw = f"{end_date}T00:00:00+00:00"
+
+                try:
+                    start_utc = _parse_google_event_time(start_raw)
+                    end_utc = _parse_google_event_time(end_raw)
+                except ValueError:
+                    continue
+
+                if end_utc <= start_utc:
+                    continue
+
+                db.add(
+                    BusyBlock(
+                        source=f"google-holiday:{calendar_id}",
                         start_utc=start_utc,
                         end_utc=end_utc,
                         fetched_at_utc=fetched_at,

@@ -41,6 +41,7 @@ class CalendarSource(BaseModel):
     calendar_id: str = Field(min_length=3, max_length=190)
     label: str = Field(default="", max_length=190)
     privacy_mode: str = Field(default="private")
+    calendar_type: str = Field(default="general")
 
 
 class TimeWindow(BaseModel):

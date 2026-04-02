@@ -14,6 +14,7 @@ def _default_calendar_sources() -> list[dict[str, str]]:
             "calendar_id": calendar_id,
             "label": calendar_id,
             "privacy_mode": "private",
+            "calendar_type": "general",
         }
         for calendar_id in ids
     ]
@@ -122,11 +123,15 @@ def load_sync_config() -> dict:
         privacy_mode = str(source.get("privacy_mode", "private")).strip().lower()
         if privacy_mode not in ("private", "official"):
             privacy_mode = "private"
+        calendar_type = str(source.get("calendar_type", "general")).strip().lower()
+        if calendar_type not in ("general", "holiday"):
+            calendar_type = "general"
         clean_sources.append(
             {
                 "calendar_id": calendar_id,
                 "label": str(source.get("label", calendar_id)).strip() or calendar_id,
                 "privacy_mode": privacy_mode,
+                "calendar_type": calendar_type,
             }
         )
 
@@ -161,11 +166,15 @@ def save_sync_config(config: dict) -> dict:
         privacy_mode = str(source.get("privacy_mode", "private")).strip().lower()
         if privacy_mode not in ("private", "official"):
             privacy_mode = "private"
+        calendar_type = str(source.get("calendar_type", "general")).strip().lower()
+        if calendar_type not in ("general", "holiday"):
+            calendar_type = "general"
         clean_sources.append(
             {
                 "calendar_id": calendar_id,
                 "label": str(source.get("label", calendar_id)).strip() or calendar_id,
                 "privacy_mode": privacy_mode,
+                "calendar_type": calendar_type,
             }
         )
 

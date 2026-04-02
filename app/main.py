@@ -10,12 +10,15 @@ from app.config import settings
 from app.db import Base, engine, get_db
 from app.models import Reservation
 from app.schemas import (
+    CalendarSource,
     ReservationCreateRequest,
     ReservationCreateResult,
+    SyncConfig,
     SlotResponse,
     SlotSearchRequest,
     SlotSearchResult,
 )
+from app.services.config_store import load_sync_config, save_sync_config
 from app.services.slots import search_slots
 
 app = FastAPI(title="Restatify Booking API", version="1.0.0")
@@ -82,4 +85,24 @@ def create_reservation(payload: ReservationCreateRequest, db: Session = Depends(
         status="confirmed",
         start_iso=payload.start_iso.isoformat(),
         end_iso=end_dt.isoformat(),
+    )
+
+
+@app.get("/v1/config/sync", response_model=SyncConfig, dependencies=[Depends(require_api_key)])
+def get_sync_config() -> SyncConfig:
+    config = load_sync_config()
+    return SyncConfig(
+        sync_enabled=bool(config.get("sync_enabled", True)),
+        sync_interval_minutes=int(config.get("sync_interval_minutes", 15)),
+        calendar_sources=[CalendarSource(**item) for item in config.get("calendar_sources", []) if isinstance(item, dict)],
+    )
+
+
+@app.put("/v1/config/sync", response_model=SyncConfig, dependencies=[Depends(require_api_key)])
+def update_sync_config(payload: SyncConfig) -> SyncConfig:
+    config = save_sync_config(payload.model_dump())
+    return SyncConfig(
+        sync_enabled=bool(config.get("sync_enabled", True)),
+        sync_interval_minutes=int(config.get("sync_interval_minutes", 15)),
+        calendar_sources=[CalendarSource(**item) for item in config.get("calendar_sources", []) if isinstance(item, dict)],
     )

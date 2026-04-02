@@ -15,12 +15,15 @@ Small self-hosted API for searching free slots and creating reservations.
 - `GET /health`
 - `POST /v1/slots/search`
 - `POST /v1/reservations`
+- `GET /v1/config/sync`
+- `PUT /v1/config/sync`
 
 ## Cron sync
 
 - Worker command: `python -m app.sync_google_freebusy`
 - Reads `GOOGLE_CREDENTIALS_JSON` and `GOOGLE_CALENDAR_IDS`
 - Writes synchronized busy windows into `busy_blocks`
+- Uses persisted sync config (`sync-config.json`) for interval, enabled flag, and calendar list
 
 ## Quick start
 

@@ -35,3 +35,15 @@ class ReservationCreateResult(BaseModel):
     status: str
     start_iso: str
     end_iso: str
+
+
+class CalendarSource(BaseModel):
+    calendar_id: str = Field(min_length=3, max_length=190)
+    label: str = Field(default="", max_length=190)
+    privacy_mode: str = Field(default="private")
+
+
+class SyncConfig(BaseModel):
+    sync_enabled: bool = True
+    sync_interval_minutes: int = Field(default=15, ge=5, le=720)
+    calendar_sources: list[CalendarSource] = Field(default_factory=list)

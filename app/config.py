@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     google_credentials_json: str = ""
     google_calendar_ids: str = ""
     sync_window_days: int = 30
+    sync_config_path: str = "./sync-config.json"
 
 
 settings = Settings()

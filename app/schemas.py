@@ -43,7 +43,18 @@ class CalendarSource(BaseModel):
     privacy_mode: str = Field(default="private")
 
 
+class TimeWindow(BaseModel):
+    start: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    end: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+class DayAvailability(BaseModel):
+    weekday: int = Field(ge=0, le=6)
+    windows: list[TimeWindow] = Field(default_factory=list)
+
+
 class SyncConfig(BaseModel):
     sync_enabled: bool = True
     sync_interval_minutes: int = Field(default=15, ge=5, le=720)
     calendar_sources: list[CalendarSource] = Field(default_factory=list)
+    availability_rules: list[DayAvailability] = Field(default_factory=list)

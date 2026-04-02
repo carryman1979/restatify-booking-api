@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import BusyBlock, Reservation
+from app.services.config_store import load_sync_config
 
 
 def _to_utc(dt: datetime, timezone_name: str) -> datetime:
@@ -23,6 +24,26 @@ def _to_zone(dt: datetime, timezone_name: str) -> datetime:
 
 def _overlaps(a_start: datetime, a_end: datetime, b_start: datetime, b_end: datetime) -> bool:
     return a_start < b_end and b_start < a_end
+
+
+def _to_minutes(hhmm: str) -> int:
+    hours, minutes = hhmm.split(":", 1)
+    return int(hours) * 60 + int(minutes)
+
+
+def _is_in_allowed_windows(local_start: datetime, local_end: datetime, availability_rules: dict[int, list[tuple[int, int]]]) -> bool:
+    windows = availability_rules.get(local_start.weekday(), [])
+    if len(windows) == 0:
+        return False
+
+    start_minutes = local_start.hour * 60 + local_start.minute
+    end_minutes = local_end.hour * 60 + local_end.minute
+
+    for window_start, window_end in windows:
+        if start_minutes >= window_start and end_minutes <= window_end:
+            return True
+
+    return False
 
 
 def search_slots(db: Session, start_iso: datetime, end_iso: datetime, duration_minutes: int, timezone_name: str) -> list[dict[str, str]]:
@@ -61,13 +82,50 @@ def search_slots(db: Session, start_iso: datetime, end_iso: datetime, duration_m
     cursor_local = _to_zone(start_utc, timezone_name)
     end_local = _to_zone(end_utc, timezone_name)
 
+    sync_config = load_sync_config()
+    availability_rules_raw = sync_config.get("availability_rules", []) if isinstance(sync_config, dict) else []
+    availability_rules: dict[int, list[tuple[int, int]]] = {}
+    if isinstance(availability_rules_raw, list):
+        for rule in availability_rules_raw:
+            if not isinstance(rule, dict):
+                continue
+            weekday = int(rule.get("weekday", -1))
+            if weekday < 0 or weekday > 6:
+                continue
+
+            windows_raw = rule.get("windows", [])
+            if not isinstance(windows_raw, list):
+                continue
+
+            windows: list[tuple[int, int]] = []
+            for window in windows_raw:
+                if not isinstance(window, dict):
+                    continue
+                start_hhmm = str(window.get("start", "")).strip()
+                end_hhmm = str(window.get("end", "")).strip()
+                if len(start_hhmm) != 5 or len(end_hhmm) != 5 or ":" not in start_hhmm or ":" not in end_hhmm:
+                    continue
+                start_minutes = _to_minutes(start_hhmm)
+                end_minutes = _to_minutes(end_hhmm)
+                if start_minutes >= end_minutes:
+                    continue
+                windows.append((start_minutes, end_minutes))
+
+            if len(windows) > 0:
+                availability_rules[weekday] = windows
+
+    if len(availability_rules) == 0:
+        for weekday in range(5):
+            availability_rules[weekday] = [
+                (settings.workday_start_hour * 60, settings.workday_end_hour * 60)
+            ]
+
     minute_step = max(15, settings.slot_step_minutes)
     duration = timedelta(minutes=duration_minutes)
 
     while cursor_local < end_local:
-        if settings.workday_start_hour <= cursor_local.hour < settings.workday_end_hour:
-            slot_end_local = cursor_local + duration
-            if slot_end_local <= end_local and slot_end_local.hour <= settings.workday_end_hour:
+        slot_end_local = cursor_local + duration
+        if slot_end_local <= end_local and _is_in_allowed_windows(cursor_local, slot_end_local, availability_rules):
                 slot_start_utc = cursor_local.astimezone(timezone.utc)
                 slot_end_utc = slot_end_local.astimezone(timezone.utc)
 

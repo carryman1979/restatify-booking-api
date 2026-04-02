@@ -11,6 +11,7 @@ from app.db import Base, engine, get_db
 from app.models import Reservation
 from app.schemas import (
     CalendarSource,
+    DayAvailability,
     ReservationCreateRequest,
     ReservationCreateResult,
     SyncConfig,
@@ -95,6 +96,7 @@ def get_sync_config() -> SyncConfig:
         sync_enabled=bool(config.get("sync_enabled", True)),
         sync_interval_minutes=int(config.get("sync_interval_minutes", 15)),
         calendar_sources=[CalendarSource(**item) for item in config.get("calendar_sources", []) if isinstance(item, dict)],
+        availability_rules=[DayAvailability(**item) for item in config.get("availability_rules", []) if isinstance(item, dict)],
     )
 
 
@@ -105,4 +107,5 @@ def update_sync_config(payload: SyncConfig) -> SyncConfig:
         sync_enabled=bool(config.get("sync_enabled", True)),
         sync_interval_minutes=int(config.get("sync_interval_minutes", 15)),
         calendar_sources=[CalendarSource(**item) for item in config.get("calendar_sources", []) if isinstance(item, dict)],
+        availability_rules=[DayAvailability(**item) for item in config.get("availability_rules", []) if isinstance(item, dict)],
     )

@@ -9,6 +9,8 @@ Small self-hosted API for searching free slots and creating reservations.
 - Reservation creation with conflict checks
 - PostgreSQL-ready via `DATABASE_URL`
 - Google Calendar Free/Busy sync worker via cron (`app.sync_google_freebusy`)
+- Weekly availability rules with multiple daily windows (for lunch breaks etc.)
+- Optional holiday calendar type that is treated as hard blocker
 
 ## Endpoints
 
@@ -23,7 +25,21 @@ Small self-hosted API for searching free slots and creating reservations.
 - Worker command: `python -m app.sync_google_freebusy`
 - Reads `GOOGLE_CREDENTIALS_JSON` and `GOOGLE_CALENDAR_IDS`
 - Writes synchronized busy windows into `busy_blocks`
-- Uses persisted sync config (`sync-config.json`) for interval, enabled flag, and calendar list
+- Calendar config supports `privacy_mode` and `calendar_type` (`general` or `holiday`)
+
+## Sync config model
+
+`calendar_sources` item fields:
+
+- `calendar_id`
+- `label`
+- `privacy_mode` (`private` or `official`)
+- `calendar_type` (`general` or `holiday`)
+
+`availability_rules` format:
+
+- weekday `0-6` (Monday = `0`)
+- multiple time windows per day, e.g. `09:00-12:00` and `13:00-17:00`
 
 ## Quick start
 

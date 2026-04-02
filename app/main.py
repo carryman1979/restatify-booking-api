@@ -22,7 +22,7 @@ from app.schemas import (
 from app.services.config_store import load_sync_config, save_sync_config
 from app.services.slots import search_slots
 
-app = FastAPI(title="Restatify Booking API", version="1.1.0")
+app = FastAPI(title="Restatify Booking API", version="1.1.1")
 
 
 @app.on_event("startup")

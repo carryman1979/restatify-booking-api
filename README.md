@@ -2,6 +2,8 @@
 
 Small self-hosted API for searching free slots and creating reservations.
 
+Version: 1.1.1
+
 ## Features
 
 - API key protected endpoints
@@ -11,6 +13,12 @@ Small self-hosted API for searching free slots and creating reservations.
 - Google Calendar Free/Busy sync worker via cron (`app.sync_google_freebusy`)
 - Weekly availability rules with multiple daily windows (for lunch breaks etc.)
 - Optional holiday calendar type that is treated as hard blocker
+
+## Compatibility
+
+- Works with `WP Restatify Booking Assistant` as primary frontend.
+- Works with `Restatify Multi Chat Overlay` indirectly via Booking Assistant handover flow.
+- API itself has no runtime dependency on either WordPress plugin.
 
 ## Endpoints
 
@@ -65,3 +73,11 @@ Then edit `.env` and Caddy hostname.
 
 Google Calendar free/busy sync is designed to be added as a follow-up worker service.
 This API already exposes the contract needed by the WordPress booking plugin and chat integration.
+
+## Release packaging
+
+Create a release archive from repository root:
+
+```bash
+tar -czf release/restatify-booking-api-1.1.1.tar.gz --exclude='.git' .
+```

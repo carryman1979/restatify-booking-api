@@ -13,6 +13,9 @@ Version: 1.1.1
 - Google Calendar Free/Busy sync worker via cron (`app.sync_google_freebusy`)
 - Weekly availability rules with multiple daily windows (for lunch breaks etc.)
 - Optional holiday calendar type that is treated as hard blocker
+- Polling-based double-booking conflict detection with deduplicated alert memory
+- Optional email notification for newly detected conflicts
+- Reservation-time live Google FreeBusy recheck to reduce race-condition collisions
 
 ## Compatibility
 
@@ -34,6 +37,21 @@ Version: 1.1.1
 - Reads `GOOGLE_CREDENTIALS_JSON` and `GOOGLE_CALENDAR_IDS`
 - Writes synchronized busy windows into `busy_blocks`
 - Calendar config supports `privacy_mode` and `calendar_type` (`general` or `holiday`)
+
+During sync, overlaps between local reservations and fetched Google busy windows are recorded in
+`booking_conflicts` and can trigger a one-time email alert per unique conflict key.
+
+## Conflict notification env vars
+
+- `CONFLICT_NOTIFY_ENABLED=true|false`
+- `CONFLICT_NOTIFY_EMAIL=alerts@example.com`
+- `CONFLICT_NOTIFY_FROM=restatify-booking-api@your-domain.tld`
+- `SMTP_HOST=smtp.example.com`
+- `SMTP_PORT=587`
+- `SMTP_USERNAME=...`
+- `SMTP_PASSWORD=...`
+- `SMTP_USE_STARTTLS=true|false`
+- `SMTP_USE_SSL=true|false`
 
 ## Sync config model
 
@@ -58,6 +76,29 @@ source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --host 127.0.0.1 --port 8088
 ```
+
+## Local Docker quick start (Rancher Desktop)
+
+1. Use Rancher Desktop with `dockerd` runtime.
+2. Copy `.env.local.example` to `.env.local` and adjust values.
+3. Start stack:
+
+```bash
+docker compose up -d --build
+```
+
+4. Optional sync run:
+
+```bash
+docker compose --profile manual run --rm sync
+```
+
+5. Open:
+
+- API health: `http://localhost:8088/health`
+- Mail test inbox: `http://localhost:8025`
+
+See `RUNBOOK.md` for detailed local test commands.
 
 ## Production install
 

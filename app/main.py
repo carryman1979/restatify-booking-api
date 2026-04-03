@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import json
 import secrets
 from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends, FastAPI, Header, HTTPException
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -37,6 +41,83 @@ def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
 
+def _has_time_overlap(start_a: datetime, end_a: datetime, start_b: datetime, end_b: datetime) -> bool:
+    return start_a < end_b and start_b < end_a
+
+
+def _get_google_calendar_ids_for_check() -> list[str]:
+    sync_config = load_sync_config()
+    calendar_sources = sync_config.get("calendar_sources", []) if isinstance(sync_config, dict) else []
+    ids = [
+        str(item.get("calendar_id", "")).strip()
+        for item in calendar_sources
+        if isinstance(item, dict) and str(item.get("calendar_id", "")).strip() != ""
+    ]
+    if len(ids) > 0:
+        return ids
+
+    return [item.strip() for item in settings.google_calendar_ids.split(",") if item.strip() != ""]
+
+
+def _has_google_live_conflict(start_utc: datetime, end_utc: datetime) -> bool:
+    credentials_json = settings.google_credentials_json.strip()
+    calendar_ids = _get_google_calendar_ids_for_check()
+    if credentials_json == "" or len(calendar_ids) == 0:
+        return False
+
+    try:
+        creds_payload = json.loads(credentials_json)
+        credentials = Credentials.from_service_account_info(
+            creds_payload,
+            scopes=["https://www.googleapis.com/auth/calendar.readonly"],
+        )
+        service = build("calendar", "v3", credentials=credentials, cache_discovery=False)
+        result = service.freebusy().query(
+            body={
+                "timeMin": start_utc.isoformat(),
+                "timeMax": end_utc.isoformat(),
+                "items": [{"id": cal_id} for cal_id in calendar_ids],
+            }
+        ).execute()
+    except Exception as exc:
+        # Keep reservation flow available if Google check cannot be reached.
+        print(f"Google live conflict check failed: {exc}")
+        return False
+
+    calendars_data = (result or {}).get("calendars", {})
+    for payload in calendars_data.values() if isinstance(calendars_data, dict) else []:
+        busy_ranges = payload.get("busy", []) if isinstance(payload, dict) else []
+        for busy_range in busy_ranges:
+            start_raw = str(busy_range.get("start") or "").strip()
+            end_raw = str(busy_range.get("end") or "").strip()
+            if start_raw == "" or end_raw == "":
+                continue
+            try:
+                busy_start = datetime.fromisoformat(start_raw.replace("Z", "+00:00")).astimezone(timezone.utc)
+                busy_end = datetime.fromisoformat(end_raw.replace("Z", "+00:00")).astimezone(timezone.utc)
+            except ValueError:
+                continue
+
+            if _has_time_overlap(start_utc, end_utc, busy_start, busy_end):
+                return True
+
+    return False
+
+
+def _has_local_reservation_overlap(db: Session, start_utc: datetime, end_utc: datetime) -> bool:
+    stmt = select(Reservation).where(
+        and_(
+            Reservation.status.in_(["held", "confirmed"]),
+            or_(
+                and_(Reservation.start_utc >= start_utc, Reservation.start_utc < end_utc),
+                and_(Reservation.end_utc > start_utc, Reservation.end_utc <= end_utc),
+                and_(Reservation.start_utc <= start_utc, Reservation.end_utc >= end_utc),
+            ),
+        )
+    )
+    return db.execute(stmt).scalar_one_or_none() is not None
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -66,6 +147,17 @@ def create_reservation(payload: ReservationCreateRequest, db: Session = Depends(
     if not is_available:
         raise HTTPException(status_code=409, detail="Slot is no longer available")
 
+    start_utc = start_dt.astimezone(timezone.utc)
+    end_utc = end_dt.astimezone(timezone.utc)
+
+    # Recheck overlap right before commit to reduce race-condition double-bookings.
+    if _has_local_reservation_overlap(db, start_utc, end_utc):
+        raise HTTPException(status_code=409, detail="Slot is already reserved")
+
+    # Optional live Google check catches manual calendar changes between polling runs.
+    if _has_google_live_conflict(start_utc, end_utc):
+        raise HTTPException(status_code=409, detail="Slot conflicts with current Google calendar data")
+
     reference = "RBK-" + secrets.token_hex(5).upper()
     reservation = Reservation(
         reference=reference,
@@ -73,8 +165,8 @@ def create_reservation(payload: ReservationCreateRequest, db: Session = Depends(
         email=str(payload.email),
         note=payload.note,
         timezone=payload.timezone,
-        start_utc=start_dt.astimezone(timezone.utc),
-        end_utc=end_dt.astimezone(timezone.utc),
+        start_utc=start_utc,
+        end_utc=end_utc,
         status="confirmed",
         created_at_utc=datetime.now(timezone.utc),
     )

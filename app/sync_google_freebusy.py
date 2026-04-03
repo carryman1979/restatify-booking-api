@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import smtplib
 from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
 from pathlib import Path
 
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
-from sqlalchemy import delete
+from sqlalchemy import and_, delete, or_, select
 
 from app.config import settings
 from app.db import SessionLocal, engine
-from app.models import Base, BusyBlock
+from app.models import Base, BookingConflict, BusyBlock, Reservation
 from app.services.config_store import load_sync_config
 
 
@@ -38,6 +41,183 @@ def _mark_run() -> None:
 
 def _parse_google_event_time(raw_value: str) -> datetime:
     return datetime.fromisoformat(raw_value.replace("Z", "+00:00")).astimezone(timezone.utc)
+
+
+def _has_overlap(start_a: datetime, end_a: datetime, start_b: datetime, end_b: datetime) -> bool:
+    return start_a < end_b and start_b < end_a
+
+
+def _build_conflict_key(
+    reservation_reference: str,
+    reservation_start_utc: datetime,
+    reservation_end_utc: datetime,
+    busy_source: str,
+    busy_start_utc: datetime,
+    busy_end_utc: datetime,
+) -> str:
+    raw = "|".join(
+        [
+            reservation_reference,
+            reservation_start_utc.isoformat(),
+            reservation_end_utc.isoformat(),
+            busy_source,
+            busy_start_utc.isoformat(),
+            busy_end_utc.isoformat(),
+        ]
+    )
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return digest[:64]
+
+
+def _send_conflict_notification(rows: list[BookingConflict]) -> bool:
+    if len(rows) == 0:
+        return True
+
+    if not settings.conflict_notify_enabled:
+        return True
+
+    recipient = settings.conflict_notify_email.strip()
+    smtp_host = settings.smtp_host.strip()
+    if recipient == "" or smtp_host == "":
+        print("Conflict notifications enabled but recipient or SMTP host is missing")
+        return False
+
+    message = EmailMessage()
+    message["Subject"] = f"[Restatify Booking API] {len(rows)} new booking conflict(s) detected"
+    message["From"] = settings.conflict_notify_from.strip() or "restatify-booking-api@localhost"
+    message["To"] = recipient
+
+    body_lines = [
+        "The booking sync detected overlaps between reservations and Google busy windows.",
+        "",
+    ]
+    for row in rows:
+        body_lines.extend(
+            [
+                f"- Reservation: {row.reservation_reference}",
+                f"  Customer: {row.reservation_email}",
+                f"  Reserved: {row.reservation_start_utc.isoformat()} -> {row.reservation_end_utc.isoformat()}",
+                f"  Busy Source: {row.busy_source}",
+                f"  Busy Range: {row.busy_start_utc.isoformat()} -> {row.busy_end_utc.isoformat()}",
+                "",
+            ]
+        )
+
+    body_lines.append("This conflict key is deduplicated in booking_conflicts, so each conflict is notified once.")
+    message.set_content("\n".join(body_lines))
+
+    try:
+        if settings.smtp_use_ssl:
+            with smtplib.SMTP_SSL(smtp_host, settings.smtp_port, timeout=20) as smtp:
+                if settings.smtp_username.strip() != "":
+                    smtp.login(settings.smtp_username, settings.smtp_password)
+                smtp.send_message(message)
+        else:
+            with smtplib.SMTP(smtp_host, settings.smtp_port, timeout=20) as smtp:
+                if settings.smtp_use_starttls:
+                    smtp.starttls()
+                if settings.smtp_username.strip() != "":
+                    smtp.login(settings.smtp_username, settings.smtp_password)
+                smtp.send_message(message)
+    except Exception as exc:
+        print(f"Failed to send conflict notification email: {exc}")
+        return False
+
+    return True
+
+
+def _detect_and_store_conflicts(db, now_utc: datetime, max_utc: datetime) -> None:
+    reservation_stmt = select(Reservation).where(
+        and_(
+            Reservation.status.in_(["held", "confirmed"]),
+            Reservation.end_utc > now_utc,
+            Reservation.start_utc < max_utc,
+        )
+    )
+    reservations = list(db.execute(reservation_stmt).scalars().all())
+
+    busy_stmt = select(BusyBlock).where(
+        and_(
+            BusyBlock.end_utc > now_utc,
+            BusyBlock.start_utc < max_utc,
+        )
+    )
+    busy_blocks = list(db.execute(busy_stmt).scalars().all())
+
+    detected: dict[str, dict] = {}
+    for reservation in reservations:
+        for block in busy_blocks:
+            if not _has_overlap(reservation.start_utc, reservation.end_utc, block.start_utc, block.end_utc):
+                continue
+
+            key = _build_conflict_key(
+                reservation.reference,
+                reservation.start_utc,
+                reservation.end_utc,
+                block.source,
+                block.start_utc,
+                block.end_utc,
+            )
+            detected[key] = {
+                "conflict_key": key,
+                "reservation_reference": reservation.reference,
+                "reservation_email": reservation.email,
+                "reservation_start_utc": reservation.start_utc,
+                "reservation_end_utc": reservation.end_utc,
+                "busy_source": block.source,
+                "busy_start_utc": block.start_utc,
+                "busy_end_utc": block.end_utc,
+            }
+
+    seen_keys = set(detected.keys())
+
+    existing_map: dict[str, BookingConflict] = {}
+    if len(seen_keys) > 0:
+        existing_stmt = select(BookingConflict).where(BookingConflict.conflict_key.in_(list(seen_keys)))
+        for row in db.execute(existing_stmt).scalars().all():
+            existing_map[row.conflict_key] = row
+
+    rows_to_notify: list[BookingConflict] = []
+    for key, payload in detected.items():
+        row = existing_map.get(key)
+        if row is None:
+            row = BookingConflict(
+                conflict_key=payload["conflict_key"],
+                reservation_reference=payload["reservation_reference"],
+                reservation_email=payload["reservation_email"],
+                reservation_start_utc=payload["reservation_start_utc"],
+                reservation_end_utc=payload["reservation_end_utc"],
+                busy_source=payload["busy_source"],
+                busy_start_utc=payload["busy_start_utc"],
+                busy_end_utc=payload["busy_end_utc"],
+                status="open",
+                first_detected_at_utc=now_utc,
+                last_seen_at_utc=now_utc,
+                notified_at_utc=None,
+                resolved_at_utc=None,
+            )
+            db.add(row)
+            existing_map[key] = row
+        else:
+            row.status = "open"
+            row.last_seen_at_utc = now_utc
+            row.resolved_at_utc = None
+
+        if row.notified_at_utc is None:
+            rows_to_notify.append(row)
+
+    open_stmt = select(BookingConflict).where(BookingConflict.status == "open")
+    open_rows = list(db.execute(open_stmt).scalars().all())
+    for row in open_rows:
+        if row.conflict_key in seen_keys:
+            continue
+        row.status = "resolved"
+        row.resolved_at_utc = now_utc
+
+    sent = _send_conflict_notification(rows_to_notify)
+    if sent:
+        for row in rows_to_notify:
+            row.notified_at_utc = now_utc
 
 
 def run() -> None:
@@ -182,6 +362,9 @@ def run() -> None:
                         fetched_at_utc=fetched_at,
                     )
                 )
+
+        db.flush()
+        _detect_and_store_conflicts(db, now_utc, max_utc)
 
         db.commit()
         print(f"Google free/busy sync finished for {len(calendars)} calendar(s)")

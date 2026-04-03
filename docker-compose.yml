@@ -1,0 +1,66 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: restatify-booking-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: restatify_booking
+      POSTGRES_USER: restatify_booking
+      POSTGRES_PASSWORD: restatify_booking
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U restatify_booking -d restatify_booking"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: restatify-booking-mailpit
+    restart: unless-stopped
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: restatify-booking-api
+    restart: unless-stopped
+    env_file:
+      - .env.local
+    ports:
+      - "8088:8088"
+    volumes:
+      - booking_data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8088/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+  sync:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: restatify-booking-sync
+    profiles: ["manual"]
+    env_file:
+      - .env.local
+    command: ["python", "-m", "app.sync_google_freebusy"]
+    volumes:
+      - booking_data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  booking_data:

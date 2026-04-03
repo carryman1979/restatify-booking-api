@@ -27,3 +27,22 @@ class BusyBlock(Base):
     start_utc: Mapped[DateTime] = mapped_column(DateTime(timezone=True), index=True)
     end_utc: Mapped[DateTime] = mapped_column(DateTime(timezone=True), index=True)
     fetched_at_utc: Mapped[DateTime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class BookingConflict(Base):
+    __tablename__ = "booking_conflicts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    conflict_key: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    reservation_reference: Mapped[str] = mapped_column(String(40), index=True)
+    reservation_email: Mapped[str] = mapped_column(String(190), default="")
+    reservation_start_utc: Mapped[DateTime] = mapped_column(DateTime(timezone=True), index=True)
+    reservation_end_utc: Mapped[DateTime] = mapped_column(DateTime(timezone=True), index=True)
+    busy_source: Mapped[str] = mapped_column(String(120), index=True)
+    busy_start_utc: Mapped[DateTime] = mapped_column(DateTime(timezone=True), index=True)
+    busy_end_utc: Mapped[DateTime] = mapped_column(DateTime(timezone=True), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="open", index=True)
+    first_detected_at_utc: Mapped[DateTime] = mapped_column(DateTime(timezone=True), index=True)
+    last_seen_at_utc: Mapped[DateTime] = mapped_column(DateTime(timezone=True), index=True)
+    notified_at_utc: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    resolved_at_utc: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)

@@ -18,6 +18,15 @@ class Settings(BaseSettings):
     google_calendar_ids: str = ""
     sync_window_days: int = 30
     sync_config_path: str = "./sync-config.json"
+    conflict_notify_enabled: bool = False
+    conflict_notify_email: str = ""
+    conflict_notify_from: str = "restatify-booking-api@localhost"
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_use_starttls: bool = True
+    smtp_use_ssl: bool = False
 
 
 settings = Settings()

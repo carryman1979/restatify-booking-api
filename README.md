@@ -9,6 +9,7 @@ Version: 1.1.1
 - API key protected endpoints
 - Slot search based on workday hours and existing reservations
 - Reservation creation with conflict checks
+- Automatic Google Calendar event creation after successful reservation
 - PostgreSQL-ready via `DATABASE_URL`
 - Google Calendar Free/Busy sync worker via cron (`app.sync_google_freebusy`)
 - Weekly availability rules with multiple daily windows (for lunch breaks etc.)
@@ -16,6 +17,7 @@ Version: 1.1.1
 - Polling-based double-booking conflict detection with deduplicated alert memory
 - Optional email notification for newly detected conflicts
 - Reservation-time live Google FreeBusy recheck to reduce race-condition collisions
+- Optional explicit write-target calendar selection
 
 ## Compatibility
 
@@ -43,6 +45,20 @@ Version: 1.1.1
 During sync, overlaps between local reservations and fetched Google busy windows are recorded in
 `booking_conflicts` and can trigger a one-time email alert per unique conflict key.
 
+When a reservation is created, the API also creates a Google Calendar event (unless disabled).
+The service account must have at least "Make changes to events" access on the target calendar.
+
+## Google reservation write env vars
+
+- `GOOGLE_WRITE_EVENTS_ENABLED=true|false`
+- `GOOGLE_WRITE_CALENDAR_ID=your-calendar-id@group.calendar.google.com`
+
+Write target policy:
+
+1. `write_calendar_id` from sync config (plugin) is used when set
+2. otherwise `GOOGLE_WRITE_CALENDAR_ID` is used
+3. if both are empty, reservation returns an error and no local reservation is persisted
+
 ## Conflict notification env vars
 
 - `CONFLICT_NOTIFY_ENABLED=true|false`
@@ -68,6 +84,11 @@ During sync, overlaps between local reservations and fetched Google busy windows
 
 - weekday `0-6` (Monday = `0`)
 - multiple time windows per day, e.g. `09:00-12:00` and `13:00-17:00`
+
+Additional sync config fields (can be pushed from WordPress plugin):
+
+- `write_events_enabled` (`true`/`false`)
+- `write_calendar_id` (optional calendar ID override)
 
 ## Quick start
 

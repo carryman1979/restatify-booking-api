@@ -31,6 +31,16 @@ def _to_minutes(hhmm: str) -> int:
     return int(hours) * 60 + int(minutes)
 
 
+def _ceil_to_quarter_hour(dt: datetime) -> datetime:
+    # Remove sub-minute precision first so generated slots are clean.
+    normalized = dt.replace(second=0, microsecond=0)
+    minute_mod = normalized.minute % 15
+    if minute_mod == 0:
+        return normalized
+
+    return normalized + timedelta(minutes=(15 - minute_mod))
+
+
 def _is_in_allowed_windows(local_start: datetime, local_end: datetime, availability_rules: dict[int, list[tuple[int, int]]]) -> bool:
     windows = availability_rules.get(local_start.weekday(), [])
     if len(windows) == 0:
@@ -79,7 +89,7 @@ def search_slots(db: Session, start_iso: datetime, end_iso: datetime, duration_m
     busy_blocks = list(db.execute(busy_stmt).scalars().all())
 
     slots: list[dict[str, str]] = []
-    cursor_local = _to_zone(start_utc, timezone_name)
+    cursor_local = _ceil_to_quarter_hour(_to_zone(start_utc, timezone_name))
     end_local = _to_zone(end_utc, timezone_name)
 
     sync_config = load_sync_config()

@@ -59,3 +59,5 @@ class SyncConfig(BaseModel):
     sync_interval_minutes: int = Field(default=15, ge=5, le=720)
     calendar_sources: list[CalendarSource] = Field(default_factory=list)
     availability_rules: list[DayAvailability] = Field(default_factory=list)
+    write_events_enabled: bool = True
+    write_calendar_id: str = Field(default="", max_length=190)

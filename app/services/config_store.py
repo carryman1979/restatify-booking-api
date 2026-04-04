@@ -38,6 +38,8 @@ def get_default_sync_config() -> dict:
         "sync_interval_minutes": 15,
         "calendar_sources": _default_calendar_sources(),
         "availability_rules": default_rules,
+        "write_events_enabled": settings.google_write_events_enabled,
+        "write_calendar_id": settings.google_write_calendar_id.strip(),
     }
 
 
@@ -110,6 +112,8 @@ def load_sync_config() -> dict:
             "sync_interval_minutes": int(parsed.get("sync_interval_minutes", config["sync_interval_minutes"])),
             "calendar_sources": parsed.get("calendar_sources", config["calendar_sources"]),
             "availability_rules": parsed.get("availability_rules", config["availability_rules"]),
+            "write_events_enabled": bool(parsed.get("write_events_enabled", config.get("write_events_enabled", settings.google_write_events_enabled))),
+            "write_calendar_id": str(parsed.get("write_calendar_id", config.get("write_calendar_id", settings.google_write_calendar_id))).strip(),
         }
     )
 
@@ -138,6 +142,8 @@ def load_sync_config() -> dict:
     config["calendar_sources"] = clean_sources
     config["sync_interval_minutes"] = max(5, min(720, int(config["sync_interval_minutes"])))
     config["availability_rules"] = _normalize_availability_rules(config.get("availability_rules", []))
+    config["write_events_enabled"] = bool(config.get("write_events_enabled", settings.google_write_events_enabled))
+    config["write_calendar_id"] = str(config.get("write_calendar_id", settings.google_write_calendar_id)).strip()
 
     return config
 
@@ -153,6 +159,8 @@ def save_sync_config(config: dict) -> dict:
             "sync_interval_minutes": max(5, min(720, int(config.get("sync_interval_minutes", sanitized["sync_interval_minutes"])) )) ,
             "calendar_sources": config.get("calendar_sources", sanitized["calendar_sources"]),
             "availability_rules": config.get("availability_rules", sanitized.get("availability_rules", [])),
+            "write_events_enabled": bool(config.get("write_events_enabled", sanitized.get("write_events_enabled", settings.google_write_events_enabled))),
+            "write_calendar_id": str(config.get("write_calendar_id", sanitized.get("write_calendar_id", settings.google_write_calendar_id))).strip(),
         }
     )
 
@@ -180,6 +188,8 @@ def save_sync_config(config: dict) -> dict:
 
     sanitized["calendar_sources"] = clean_sources
     sanitized["availability_rules"] = _normalize_availability_rules(sanitized.get("availability_rules", []))
+    sanitized["write_events_enabled"] = bool(sanitized.get("write_events_enabled", settings.google_write_events_enabled))
+    sanitized["write_calendar_id"] = str(sanitized.get("write_calendar_id", settings.google_write_calendar_id)).strip()
 
     path.write_text(json.dumps(sanitized, ensure_ascii=True, indent=2), encoding="utf-8")
 

@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import Depends, FastAPI, Header, HTTPException
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
@@ -57,6 +58,14 @@ def _get_google_calendar_ids_for_check() -> list[str]:
         return ids
 
     return [item.strip() for item in settings.google_calendar_ids.split(",") if item.strip() != ""]
+
+
+def _get_google_calendar_id_for_write() -> str:
+    sync_config = load_sync_config()
+    configured = str(sync_config.get("write_calendar_id", "")).strip()
+    if configured == "":
+        configured = settings.google_write_calendar_id.strip()
+    return configured
 
 
 def _is_booking_backend_configured() -> bool:
@@ -116,6 +125,82 @@ def _has_google_live_conflict(start_utc: datetime, end_utc: datetime) -> bool:
                 return True
 
     return False
+
+
+def _create_google_calendar_event(
+    *,
+    reference: str,
+    name: str,
+    email: str,
+    note: str,
+    timezone_name: str,
+    start_dt: datetime,
+    end_dt: datetime,
+) -> None:
+    sync_config = load_sync_config()
+    write_events_enabled = bool(sync_config.get("write_events_enabled", settings.google_write_events_enabled))
+    if not write_events_enabled:
+        return
+
+    credentials_json = settings.google_credentials_json.strip()
+    if credentials_json == "":
+        raise HTTPException(status_code=503, detail="Google calendar write is not configured (missing credentials)")
+
+    calendar_id = _get_google_calendar_id_for_write()
+    if calendar_id == "":
+        raise HTTPException(status_code=503, detail="Google calendar write is not configured (write_calendar_id is required)")
+
+    try:
+        creds_payload = json.loads(credentials_json)
+        credentials = Credentials.from_service_account_info(
+            creds_payload,
+            scopes=["https://www.googleapis.com/auth/calendar"],
+        )
+        service = build("calendar", "v3", credentials=credentials, cache_discovery=False)
+
+        description_lines = [f"Reference: {reference}"]
+        if note.strip() != "":
+            description_lines.append("")
+            description_lines.append(note.strip())
+
+        body = {
+            "summary": f"Booking: {name}",
+            "description": "\n".join(description_lines),
+            "start": {
+                "dateTime": start_dt.isoformat(),
+                "timeZone": timezone_name,
+            },
+            "end": {
+                "dateTime": end_dt.isoformat(),
+                "timeZone": timezone_name,
+            },
+            "attendees": [{"email": email}],
+        }
+
+        try:
+            service.events().insert(
+                calendarId=calendar_id,
+                body=body,
+                sendUpdates="all",
+            ).execute()
+        except HttpError as exc:
+            # Service accounts without domain-wide delegation cannot invite attendees.
+            # Retry by creating the event without attendees and without invitation emails.
+            message = str(exc)
+            if "forbiddenForServiceAccounts" not in message:
+                raise
+
+            fallback_body = dict(body)
+            fallback_body.pop("attendees", None)
+            service.events().insert(
+                calendarId=calendar_id,
+                body=fallback_body,
+                sendUpdates="none",
+            ).execute()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not create Google calendar event: {exc}") from exc
 
 
 def _has_local_reservation_overlap(db: Session, start_utc: datetime, end_utc: datetime) -> bool:
@@ -188,6 +273,17 @@ def create_reservation(payload: ReservationCreateRequest, db: Session = Depends(
         status="confirmed",
         created_at_utc=datetime.now(timezone.utc),
     )
+
+    _create_google_calendar_event(
+        reference=reference,
+        name=payload.name,
+        email=str(payload.email),
+        note=payload.note,
+        timezone_name=payload.timezone,
+        start_dt=start_dt,
+        end_dt=end_dt,
+    )
+
     db.add(reservation)
     db.commit()
 
@@ -207,6 +303,8 @@ def get_sync_config() -> SyncConfig:
         sync_interval_minutes=int(config.get("sync_interval_minutes", 15)),
         calendar_sources=[CalendarSource(**item) for item in config.get("calendar_sources", []) if isinstance(item, dict)],
         availability_rules=[DayAvailability(**item) for item in config.get("availability_rules", []) if isinstance(item, dict)],
+        write_events_enabled=bool(config.get("write_events_enabled", settings.google_write_events_enabled)),
+        write_calendar_id=str(config.get("write_calendar_id", settings.google_write_calendar_id)).strip(),
     )
 
 
@@ -218,4 +316,6 @@ def update_sync_config(payload: SyncConfig) -> SyncConfig:
         sync_interval_minutes=int(config.get("sync_interval_minutes", 15)),
         calendar_sources=[CalendarSource(**item) for item in config.get("calendar_sources", []) if isinstance(item, dict)],
         availability_rules=[DayAvailability(**item) for item in config.get("availability_rules", []) if isinstance(item, dict)],
+        write_events_enabled=bool(config.get("write_events_enabled", settings.google_write_events_enabled)),
+        write_calendar_id=str(config.get("write_calendar_id", settings.google_write_calendar_id)).strip(),
     )

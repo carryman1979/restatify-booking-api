@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     max_window_days: int = 30
     google_credentials_json: str = ""
     google_calendar_ids: str = ""
+    google_write_events_enabled: bool = True
+    google_write_calendar_id: str = ""
     sync_window_days: int = 30
     sync_config_path: str = "./sync-config.json"
     conflict_notify_enabled: bool = False

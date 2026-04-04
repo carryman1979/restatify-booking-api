@@ -59,6 +59,20 @@ def _get_google_calendar_ids_for_check() -> list[str]:
     return [item.strip() for item in settings.google_calendar_ids.split(",") if item.strip() != ""]
 
 
+def _is_booking_backend_configured() -> bool:
+    return len(_get_google_calendar_ids_for_check()) > 0
+
+
+def _ensure_booking_backend_configured() -> None:
+    if _is_booking_backend_configured():
+        return
+
+    raise HTTPException(
+        status_code=503,
+        detail="Booking backend is currently unavailable. Please try again later.",
+    )
+
+
 def _has_google_live_conflict(start_utc: datetime, end_utc: datetime) -> bool:
     credentials_json = settings.google_credentials_json.strip()
     calendar_ids = _get_google_calendar_ids_for_check()
@@ -125,6 +139,8 @@ def health() -> dict[str, str]:
 
 @app.post("/v1/slots/search", response_model=SlotSearchResult, dependencies=[Depends(require_api_key)])
 def slots_search(payload: SlotSearchRequest, db: Session = Depends(get_db)) -> SlotSearchResult:
+    _ensure_booking_backend_configured()
+
     slots = search_slots(db, payload.start_iso, payload.end_iso, payload.duration_minutes, payload.timezone)
     return SlotSearchResult(
         timezone=payload.timezone,
@@ -135,6 +151,8 @@ def slots_search(payload: SlotSearchRequest, db: Session = Depends(get_db)) -> S
 
 @app.post("/v1/reservations", response_model=ReservationCreateResult, dependencies=[Depends(require_api_key)])
 def create_reservation(payload: ReservationCreateRequest, db: Session = Depends(get_db)) -> ReservationCreateResult:
+    _ensure_booking_backend_configured()
+
     start_dt = payload.start_iso
     if start_dt.tzinfo is None:
         raise HTTPException(status_code=400, detail="start_iso must include timezone")

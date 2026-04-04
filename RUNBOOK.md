@@ -4,7 +4,9 @@
 
 1. Ensure Rancher Desktop uses dockerd runtime.
 2. In this folder, copy `.env.local.example` to `.env.local`.
-3. Set `API_KEY` and, if needed, Google values in `.env.local`.
+3. Set `API_KEY` and `GOOGLE_CREDENTIALS_JSON` in `.env.local`.
+4. Configure calendars primarily in the WordPress Booking Assistant settings (`Calendars to sync`).
+5. Keep `GOOGLE_CALENDAR_IDS` empty unless you need a standalone fallback without plugin sync config.
 
 ## 2) Start stack
 

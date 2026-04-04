@@ -34,7 +34,9 @@ Version: 1.1.1
 ## Cron sync
 
 - Worker command: `python -m app.sync_google_freebusy`
-- Reads `GOOGLE_CREDENTIALS_JSON` and `GOOGLE_CALENDAR_IDS`
+- Reads `GOOGLE_CREDENTIALS_JSON`
+- Uses calendars from sync config (`/v1/config/sync`) as primary source
+- Uses `GOOGLE_CALENDAR_IDS` only as fallback when no sync config calendars are present
 - Writes synchronized busy windows into `busy_blocks`
 - Calendar config supports `privacy_mode` and `calendar_type` (`general` or `holiday`)
 

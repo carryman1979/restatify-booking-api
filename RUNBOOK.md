@@ -11,7 +11,7 @@
 - Run: `docker compose up -d --build`
 
 Services:
-- API: http://localhost:8088/health
+- API: http://127.0.0.1:8088/health
 - Mailpit UI: http://localhost:8025
 - Postgres: internal to compose network (`db:5432`)
 
@@ -22,7 +22,7 @@ Services:
 ## 4) Quick API checks
 
 - Health:
-  - `curl http://localhost:8088/health`
+  - `curl http://127.0.0.1:8088/health`
 - Slot search (PowerShell example):
   - `Invoke-RestMethod -Method Post -Uri http://localhost:8088/v1/slots/search -Headers @{ 'X-API-Key'='change-me-local' } -ContentType 'application/json' -Body '{"start_iso":"2026-04-03T09:00:00+02:00","end_iso":"2026-04-10T09:00:00+02:00","duration_minutes":30,"timezone":"Europe/Berlin"}'`
 

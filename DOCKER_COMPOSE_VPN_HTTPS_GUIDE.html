@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Docker Compose Guide - VPN + HTTPS</title>
+  <style>
+    :root {
+      --bg: #f7f8fa;
+      --card: #ffffff;
+      --text: #1b1f23;
+      --muted: #4b5563;
+      --accent: #0f766e;
+      --border: #d1d5db;
+      --code-bg: #0b1020;
+      --code-text: #e5e7eb;
+    }
+    @page { size: A4; margin: 18mm; }
+    body { margin: 0; background: var(--bg); color: var(--text); font-family: "Segoe UI", Arial, sans-serif; font-size: 13px; line-height: 1.45; }
+    .wrap { max-width: 980px; margin: 0 auto; padding: 24px; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 18px; margin-bottom: 14px; page-break-inside: avoid; }
+    h1 { margin: 0 0 8px; font-size: 24px; }
+    h2 { margin: 0 0 8px; font-size: 18px; color: var(--accent); }
+    h3 { margin: 10px 0 6px; font-size: 15px; }
+    ul, ol { margin: 6px 0 6px 18px; }
+    li { margin: 4px 0; }
+    pre { margin: 8px 0; padding: 10px 12px; border-radius: 8px; background: var(--code-bg); color: var(--code-text); border: 1px solid #1f2937; font-size: 12px; overflow-x: auto; }
+    .note { border-left: 4px solid var(--accent); background: #f0fdfa; padding: 10px 12px; border-radius: 6px; }
+    .muted { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Restatify Booking API</h1>
+      <p><strong>Docker Compose mit VPN + HTTPS (Ubuntu 24.04)</strong></p>
+      <p class="muted">Stand: 2026-04-05</p>
+      <div class="note">Ziel: Produktionsnaher Betrieb mit Docker Compose, Host-Level WireGuard und TLS via Caddy.</div>
+    </div>
+
+    <div class="card">
+      <h2>1. Zielarchitektur</h2>
+      <ul>
+        <li>Server A: WordPress</li>
+        <li>Server B: Booking API (Docker Compose)</li>
+        <li>WireGuard Tunnel zwischen beiden Hosts</li>
+        <li>Caddy terminiert HTTPS und leitet intern an API weiter</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>2. Voraussetzungen</h2>
+      <ul>
+        <li>Ubuntu 24.04 auf beiden Servern</li>
+        <li>Docker Engine + Compose Plugin auf API-Host</li>
+        <li>DNS: booking-api.deine-domain.tld auf API-Host</li>
+        <li>Offene Ports: 22/tcp, 80/tcp, 443/tcp, 51820/udp</li>
+      </ul>
+      <h3>2.1 Docker Engine + Docker Compose via apt installieren</h3>
+      <p>Empfehlung: offizielles Docker Repository fuer Ubuntu 24.04 verwenden.</p>
+      <pre>sudo apt remove -y docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc
+sudo apt update
+sudo apt install -y ca-certificates curl gnupg
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" | sudo tee /etc/apt/sources.list.d/docker.list &gt;/dev/null
+sudo apt update
+sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo systemctl enable --now docker
+sudo docker version
+sudo docker compose version</pre>
+      <p>Optional fuer Betrieb ohne sudo:</p>
+      <pre>sudo usermod -aG docker $USER</pre>
+      <p>Danach neu einloggen, damit die Gruppenmitgliedschaft greift.</p>
+    </div>
+
+    <div class="card">
+      <h2>3. Docker Compose (Produktion)</h2>
+      <pre>services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: restatify_booking
+      POSTGRES_USER: restatify_booking
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env.local
+    volumes:
+      - booking_data:/app/data
+    expose:
+      - "8088"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  pgdata:
+  booking_data:
+  caddy_data:
+  caddy_config:</pre>
+    </div>
+
+    <div class="card">
+      <h2>4. Caddy TLS Konfiguration</h2>
+      <pre>booking-api.deine-domain.tld {
+    encode zstd gzip
+    reverse_proxy api:8088
+}</pre>
+      <p>Zertifikate werden automatisch von Let's Encrypt ausgestellt.</p>
+    </div>
+
+    <div class="card">
+      <h2>5. WireGuard (Host-Ebene)</h2>
+      <pre>sudo apt install -y wireguard
+sudo systemctl enable --now wg-quick@wg0
+sudo wg show</pre>
+      <p>WireGuard laeuft auf den Hosts, nicht als Compose-Service.</p>
+    </div>
+
+    <div class="card">
+      <h2>6. HTTPS + VPN gemeinsam nutzen</h2>
+      <h3>Variante A (einfach)</h3>
+      <ul><li>Plugin nutzt https://booking-api.deine-domain.tld (oeffentliche Route, TLS-gesichert).</li></ul>
+      <h3>Variante B (bevorzugt)</h3>
+      <ul>
+        <li>Plugin nutzt weiterhin die HTTPS-Domain.</li>
+        <li>Auf WP-Host Domain lokal auf VPN-IP mappen.</li>
+      </ul>
+      <pre>10.44.0.1 booking-api.deine-domain.tld</pre>
+      <p>Ergebnis: TLS bleibt gueltig, Transport laeuft durch den WireGuard-Tunnel.</p>
+    </div>
+
+    <div class="card">
+      <h2>7. Deployment</h2>
+      <ol>
+        <li>.env.local und Caddyfile anpassen</li>
+        <li>Compose starten:</li>
+      </ol>
+      <pre>docker compose -f docker-compose.prod.yml up -d --build</pre>
+      <ol start="3">
+        <li>Health pruefen:</li>
+      </ol>
+      <pre>curl https://booking-api.deine-domain.tld/health</pre>
+      <ol start="4">
+        <li>WordPress Plugin konfigurieren (URL + API Key)</li>
+      </ol>
+    </div>
+
+    <div class="card">
+      <h2>8. Betrieb</h2>
+      <pre>docker compose -f docker-compose.prod.yml logs -f api
+docker compose -f docker-compose.prod.yml logs -f caddy
+docker compose -f docker-compose.prod.yml ps</pre>
+      <p>Secret-Rotation ohne Downtime bleibt als geplanter Security-Folgepunkt bestehen.</p>
+    </div>
+  </div>
+</body>
+</html>

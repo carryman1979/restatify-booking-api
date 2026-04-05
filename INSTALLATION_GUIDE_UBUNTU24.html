@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Restatify Booking API + Plugin - Installationsanleitung (Ubuntu 24)</title>
+  <style>
+    :root {
+      --bg: #f7f8fa;
+      --card: #ffffff;
+      --text: #1b1f23;
+      --muted: #4b5563;
+      --accent: #0f766e;
+      --border: #d1d5db;
+      --code-bg: #0b1020;
+      --code-text: #e5e7eb;
+    }
+    @page { size: A4; margin: 18mm; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+      color: var(--text);
+      background: var(--bg);
+      line-height: 1.45;
+      font-size: 13px;
+    }
+    .wrap {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px;
+      margin-bottom: 16px;
+      page-break-inside: avoid;
+    }
+    h1 { font-size: 24px; margin: 0 0 8px; }
+    h2 { font-size: 18px; margin: 0 0 8px; color: var(--accent); }
+    h3 { font-size: 15px; margin: 14px 0 6px; }
+    p { margin: 6px 0; }
+    ul, ol { margin: 6px 0 6px 18px; padding: 0; }
+    li { margin: 4px 0; }
+    code.inline {
+      font-family: Consolas, Menlo, monospace;
+      background: #eef2f7;
+      border: 1px solid #dbe1e8;
+      border-radius: 4px;
+      padding: 1px 5px;
+    }
+    pre {
+      margin: 8px 0;
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: var(--code-bg);
+      color: var(--code-text);
+      overflow-x: auto;
+      border: 1px solid #1f2937;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .muted { color: var(--muted); }
+    .note {
+      border-left: 4px solid var(--accent);
+      background: #f0fdfa;
+      padding: 10px 12px;
+      margin-top: 8px;
+      border-radius: 6px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Restatify Booking API + WordPress Plugin</h1>
+      <p><strong>Schritt-fuer-Schritt Installation fuer Ubuntu 24.04</strong></p>
+      <p class="muted">Stand: 2026-04-05</p>
+      <div class="note">
+        Zielarchitektur: WordPress-Server und API-Server getrennt, WireGuard-VPN zwischen beiden, HTTPS ueber Caddy auf dem API-Server, Plugin nutzt API-Basis-URL mit HTTPS.
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>1. Prerequisites (API-Server, Ubuntu 24.04)</h2>
+      <ol>
+        <li>DNS fuer <code class="inline">booking-api.deine-domain.tld</code> zeigt auf oeffentliche API-Server-IP.</li>
+        <li>Ports offen: <code class="inline">22/tcp</code>, <code class="inline">80/tcp</code>, <code class="inline">443/tcp</code>, <code class="inline">51820/udp</code>.</li>
+        <li>Google Service Account JSON vorhanden (falls Google Sync/Write genutzt wird).</li>
+        <li>Starker API-Key vorbereitet.</li>
+      </ol>
+      <pre>sudo apt update &amp;&amp; sudo apt upgrade -y
+sudo apt install -y ufw fail2ban unattended-upgrades curl jq git wireguard</pre>
+      <pre>sudo ufw allow OpenSSH
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw allow 51820/udp
+sudo ufw enable</pre>
+    </div>
+
+    <div class="card">
+      <h2>2. WireGuard VPN zwischen WP- und API-Server</h2>
+      <h3>Auf beiden Servern Schluessel erzeugen</h3>
+      <pre>umask 077
+wg genkey | sudo tee /etc/wireguard/privatekey | wg pubkey | sudo tee /etc/wireguard/publickey</pre>
+      <h3>Beispiel API-Server: <code class="inline">/etc/wireguard/wg0.conf</code></h3>
+      <pre>[Interface]
+Address = 10.44.0.1/24
+ListenPort = 51820
+PrivateKey = API_SERVER_PRIVATE_KEY
+
+[Peer]
+PublicKey = WP_SERVER_PUBLIC_KEY
+AllowedIPs = 10.44.0.2/32
+PersistentKeepalive = 25</pre>
+      <h3>Beispiel WP-Server: <code class="inline">/etc/wireguard/wg0.conf</code></h3>
+      <pre>[Interface]
+Address = 10.44.0.2/24
+PrivateKey = WP_SERVER_PRIVATE_KEY
+
+[Peer]
+PublicKey = API_SERVER_PUBLIC_KEY
+Endpoint = API_PUBLIC_IP:51820
+AllowedIPs = 10.44.0.1/32
+PersistentKeepalive = 25</pre>
+      <pre>sudo systemctl enable --now wg-quick@wg0
+sudo wg show</pre>
+    </div>
+
+    <div class="card">
+      <h2>3. Booking API installieren</h2>
+      <p>Repository auf API-Server kopieren und Installer starten:</p>
+      <pre>cd /tmp/restatify-booking-api
+bash install.sh</pre>
+      <p>Der Installer setzt:</p>
+      <ul>
+        <li>Systemuser <code class="inline">restatify</code></li>
+        <li>Pfad <code class="inline">/opt/restatify-booking-api</code></li>
+        <li>Python venv + Requirements</li>
+        <li>systemd Service <code class="inline">restatify-booking-api</code></li>
+        <li>Caddy Site mit Reverse Proxy auf <code class="inline">127.0.0.1:8088</code></li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>4. PostgreSQL einrichten</h2>
+      <pre>sudo -u postgres psql</pre>
+      <pre>CREATE USER restatify_booking WITH PASSWORD 'SEHR_STARKES_PASSWORT';
+CREATE DATABASE restatify_booking OWNER restatify_booking;
+\q</pre>
+    </div>
+
+    <div class="card">
+      <h2>5. API Konfiguration (.env)</h2>
+      <p>Datei: <code class="inline">/opt/restatify-booking-api/.env</code></p>
+      <pre>APP_ENV=production
+HOST=127.0.0.1
+PORT=8088
+API_KEY=SEHR_LANGER_ZUFAELLIGER_KEY
+DATABASE_URL=postgresql+psycopg://restatify_booking:SEHR_STARKES_PASSWORT@127.0.0.1:5432/restatify_booking
+DEFAULT_TIMEZONE=Europe/Berlin
+GOOGLE_CREDENTIALS_JSON={...}
+GOOGLE_CALENDAR_IDS=
+GOOGLE_WRITE_EVENTS_ENABLED=true
+GOOGLE_WRITE_CALENDAR_ID=</pre>
+      <pre>sudo systemctl restart restatify-booking-api
+sudo systemctl status restatify-booking-api --no-pager</pre>
+    </div>
+
+    <div class="card">
+      <h2>6. HTTPS Reverse Proxy mit Caddy</h2>
+      <p>Datei: <code class="inline">/etc/caddy/sites-available/restatify-booking-api.caddy</code></p>
+      <pre>booking-api.deine-domain.tld {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:8088
+}</pre>
+      <pre>sudo systemctl reload caddy
+curl -I https://booking-api.deine-domain.tld/health</pre>
+    </div>
+
+    <div class="card">
+      <h2>7. WordPress Plugin installieren</h2>
+      <ol>
+        <li>Plugin nach <code class="inline">wp-content/plugins/wp-restatify-booking-assistant</code> hochladen.</li>
+        <li>Im WP-Admin aktivieren.</li>
+        <li>Einstellungen unter <strong>Einstellungen &gt; Booking Assistant</strong> setzen:</li>
+      </ol>
+      <ul>
+        <li>API Basis URL: <code class="inline">https://booking-api.deine-domain.tld</code></li>
+        <li>API Key: derselbe wie in der API <code class="inline">.env</code></li>
+        <li>Zeitzone, Dauer, Suchfenster und Sync-Optionen konfigurieren</li>
+      </ul>
+      <ol start="4">
+        <li>Shortcode auf Zielseite platzieren: <code class="inline">[restatify_booking_popup]</code></li>
+      </ol>
+    </div>
+
+    <div class="card">
+      <h2>8. End-to-End Tests</h2>
+      <pre>curl https://booking-api.deine-domain.tld/health</pre>
+      <p>Dann im WordPress-Frontend Buchung testen und pruefen:</p>
+      <ul>
+        <li>Slot-Suche liefert Ergebnisse</li>
+        <li>Reservierung wird bestaetigt</li>
+        <li>Google-Kalendereintrag wird erstellt (falls aktiviert)</li>
+        <li>Autoresponder-Mail kommt an</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>9. Security Baseline nach Go-Live</h2>
+      <ol>
+        <li>Default API Key sofort ersetzen.</li>
+        <li>Keine Secrets in Git versionieren.</li>
+        <li>Backups fuer DB und Konfiguration einplanen.</li>
+        <li>Fail2ban und Logs regelmaessig monitoren.</li>
+        <li>Secret-Rotation als naechster Hardening-Schritt umsetzen (ohne Downtime).</li>
+      </ol>
+    </div>
+  </div>
+</body>
+</html>

@@ -123,6 +123,8 @@ docker compose --profile manual run --rm sync
 
 See `RUNBOOK.md` for detailed local test commands.
 
+For production-like Docker Compose with VPN + HTTPS, see `DOCKER_COMPOSE_VPN_HTTPS_GUIDE.md`.
+
 ## Production install
 
 Run:

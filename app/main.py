@@ -27,7 +27,7 @@ from app.schemas import (
 from app.services.config_store import load_sync_config, save_sync_config
 from app.services.slots import search_slots
 
-app = FastAPI(title="Restatify Booking API", version="1.1.1")
+app = FastAPI(title="Restatify Booking API", version="1.1.2")
 
 
 @app.on_event("startup")
@@ -49,15 +49,23 @@ def _has_time_overlap(start_a: datetime, end_a: datetime, start_b: datetime, end
 def _get_google_calendar_ids_for_check() -> list[str]:
     sync_config = load_sync_config()
     calendar_sources = sync_config.get("calendar_sources", []) if isinstance(sync_config, dict) else []
-    ids = [
+    plugin_ids = [
         str(item.get("calendar_id", "")).strip()
         for item in calendar_sources
         if isinstance(item, dict) and str(item.get("calendar_id", "")).strip() != ""
     ]
-    if len(ids) > 0:
-        return ids
 
-    return [item.strip() for item in settings.google_calendar_ids.split(",") if item.strip() != ""]
+    env_ids = [item.strip() for item in settings.google_calendar_ids.split(",") if item.strip() != ""]
+
+    merged: list[str] = []
+    seen: set[str] = set()
+    for calendar_id in env_ids + plugin_ids:
+        if calendar_id in seen:
+            continue
+        seen.add(calendar_id)
+        merged.append(calendar_id)
+
+    return merged
 
 
 def _get_google_calendar_id_for_write() -> str:

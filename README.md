@@ -2,7 +2,7 @@
 
 Small self-hosted API for searching free slots and creating reservations.
 
-Version: 1.1.1
+Version: 1.1.2
 
 ## Features
 
@@ -37,8 +37,8 @@ Version: 1.1.1
 
 - Worker command: `python -m app.sync_google_freebusy`
 - Reads `GOOGLE_CREDENTIALS_JSON`
-- Uses calendars from sync config (`/v1/config/sync`) as primary source
-- Uses `GOOGLE_CALENDAR_IDS` only as fallback when no sync config calendars are present
+- Merges calendars from sync config (`/v1/config/sync`) with `GOOGLE_CALENDAR_IDS`
+- Deduplicates IDs and syncs the combined list
 - Writes synchronized busy windows into `busy_blocks`
 - Calendar config supports `privacy_mode` and `calendar_type` (`general` or `holiday`)
 
@@ -89,6 +89,12 @@ Additional sync config fields (can be pushed from WordPress plugin):
 
 - `write_events_enabled` (`true`/`false`)
 - `write_calendar_id` (optional calendar ID override)
+
+## Calendar source merge behavior
+
+- `GOOGLE_CALENDAR_IDS` provides baseline calendars from environment configuration.
+- Plugin sync config can add additional calendars via `calendar_sources`.
+- The API merges both lists and removes duplicates for FreeBusy checks and sync worker runs.
 
 ## Quick start
 
@@ -145,5 +151,5 @@ This API already exposes the contract needed by the WordPress booking plugin and
 Create a release archive from repository root:
 
 ```bash
-tar -czf release/restatify-booking-api-1.1.1.tar.gz --exclude='.git' .
+tar -czf release/restatify-booking-api-1.1.2.tar.gz --exclude='.git' .
 ```

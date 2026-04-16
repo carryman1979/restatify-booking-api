@@ -245,14 +245,21 @@ def run() -> None:
                 continue
             calendar_source_map[calendar_id] = source
 
-    configured_calendar_ids = [
+    plugin_calendar_ids = [
         str(item.get("calendar_id", "")).strip()
         for item in calendar_sources
         if isinstance(item, dict) and str(item.get("calendar_id", "")).strip() != ""
     ]
 
-    if len(configured_calendar_ids) == 0:
-        configured_calendar_ids = [item.strip() for item in settings.google_calendar_ids.split(",") if item.strip() != ""]
+    env_calendar_ids = [item.strip() for item in settings.google_calendar_ids.split(",") if item.strip() != ""]
+
+    configured_calendar_ids: list[str] = []
+    seen: set[str] = set()
+    for calendar_id in env_calendar_ids + plugin_calendar_ids:
+        if calendar_id in seen:
+            continue
+        seen.add(calendar_id)
+        configured_calendar_ids.append(calendar_id)
 
     if settings.google_credentials_json.strip() == "" or len(configured_calendar_ids) == 0:
         print("Google sync skipped: missing credentials or calendar ids")

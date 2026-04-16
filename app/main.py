@@ -12,11 +12,13 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db import Base, engine, get_db
+from app.db import Base, engine, ensure_runtime_schema, get_db
 from app.models import Reservation
 from app.schemas import (
     CalendarSource,
     DayAvailability,
+    ReservationCancelRequest,
+    ReservationCancelResult,
     ReservationCreateRequest,
     ReservationCreateResult,
     SyncConfig,
@@ -27,12 +29,12 @@ from app.schemas import (
 from app.services.config_store import load_sync_config, save_sync_config
 from app.services.slots import search_slots
 
-app = FastAPI(title="Restatify Booking API", version="1.1.2")
+app = FastAPI(title="Restatify Booking API", version="1.2.0")
 
 
 @app.on_event("startup")
 def startup() -> None:
-    Base.metadata.create_all(bind=engine)
+    ensure_runtime_schema()
 
 
 def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
@@ -116,7 +118,21 @@ def _has_google_live_conflict(start_utc: datetime, end_utc: datetime) -> bool:
         return False
 
     calendars_data = (result or {}).get("calendars", {})
-    for payload in calendars_data.values() if isinstance(calendars_data, dict) else []:
+    if not isinstance(calendars_data, dict):
+        calendars_data = {}
+
+    inaccessible_calendars: list[str] = []
+    for calendar_id in calendar_ids:
+        payload = calendars_data.get(calendar_id, {})
+        if not isinstance(payload, dict):
+            inaccessible_calendars.append(calendar_id)
+            continue
+
+        errors = payload.get("errors", [])
+        if isinstance(errors, list) and len(errors) > 0:
+            inaccessible_calendars.append(calendar_id)
+            continue
+
         busy_ranges = payload.get("busy", []) if isinstance(payload, dict) else []
         for busy_range in busy_ranges:
             start_raw = str(busy_range.get("start") or "").strip()
@@ -132,6 +148,11 @@ def _has_google_live_conflict(start_utc: datetime, end_utc: datetime) -> bool:
             if _has_time_overlap(start_utc, end_utc, busy_start, busy_end):
                 return True
 
+    if len(inaccessible_calendars) > 0:
+        print(f"Google live conflict check failed for configured calendars: {', '.join(inaccessible_calendars)}")
+        # Fail-safe: if configured calendars cannot be checked, block booking to avoid overbooking.
+        return True
+
     return False
 
 
@@ -144,11 +165,11 @@ def _create_google_calendar_event(
     timezone_name: str,
     start_dt: datetime,
     end_dt: datetime,
-) -> None:
+) -> tuple[str, str]:
     sync_config = load_sync_config()
     write_events_enabled = bool(sync_config.get("write_events_enabled", settings.google_write_events_enabled))
     if not write_events_enabled:
-        return
+        return "", ""
 
     credentials_json = settings.google_credentials_json.strip()
     if credentials_json == "":
@@ -186,7 +207,7 @@ def _create_google_calendar_event(
         }
 
         try:
-            service.events().insert(
+            created_event = service.events().insert(
                 calendarId=calendar_id,
                 body=body,
                 sendUpdates="all",
@@ -200,15 +221,38 @@ def _create_google_calendar_event(
 
             fallback_body = dict(body)
             fallback_body.pop("attendees", None)
-            service.events().insert(
+            created_event = service.events().insert(
                 calendarId=calendar_id,
                 body=fallback_body,
                 sendUpdates="none",
             ).execute()
+        return str(created_event.get("id", "")).strip(), calendar_id
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Could not create Google calendar event: {exc}") from exc
+
+
+def _delete_google_calendar_event(*, calendar_id: str, event_id: str) -> None:
+    credentials_json = settings.google_credentials_json.strip()
+    if credentials_json == "" or calendar_id.strip() == "" or event_id.strip() == "":
+        return
+
+    try:
+        creds_payload = json.loads(credentials_json)
+        credentials = Credentials.from_service_account_info(
+            creds_payload,
+            scopes=["https://www.googleapis.com/auth/calendar"],
+        )
+        service = build("calendar", "v3", credentials=credentials, cache_discovery=False)
+        service.events().delete(calendarId=calendar_id, eventId=event_id, sendUpdates="all").execute()
+    except HttpError as exc:
+        status_code = getattr(getattr(exc, "resp", None), "status", None)
+        if status_code == 404:
+            return
+        raise HTTPException(status_code=502, detail=f"Could not delete Google calendar event: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not delete Google calendar event: {exc}") from exc
 
 
 def _has_local_reservation_overlap(db: Session, start_utc: datetime, end_utc: datetime) -> bool:
@@ -270,19 +314,8 @@ def create_reservation(payload: ReservationCreateRequest, db: Session = Depends(
         raise HTTPException(status_code=409, detail="Slot conflicts with current Google calendar data")
 
     reference = "RBK-" + secrets.token_hex(5).upper()
-    reservation = Reservation(
-        reference=reference,
-        name=payload.name,
-        email=str(payload.email),
-        note=payload.note,
-        timezone=payload.timezone,
-        start_utc=start_utc,
-        end_utc=end_utc,
-        status="confirmed",
-        created_at_utc=datetime.now(timezone.utc),
-    )
-
-    _create_google_calendar_event(
+    cancel_token = secrets.token_urlsafe(24)
+    google_event_id, google_event_calendar_id = _create_google_calendar_event(
         reference=reference,
         name=payload.name,
         email=str(payload.email),
@@ -292,14 +325,83 @@ def create_reservation(payload: ReservationCreateRequest, db: Session = Depends(
         end_dt=end_dt,
     )
 
+    reservation = Reservation(
+        reference=reference,
+        cancel_token=cancel_token,
+        name=payload.name,
+        email=str(payload.email),
+        note=payload.note,
+        timezone=payload.timezone,
+        start_utc=start_utc,
+        end_utc=end_utc,
+        status="confirmed",
+        cancellation_reason="",
+        cancellation_message="",
+        cancelled_at_utc=None,
+        google_event_id=google_event_id,
+        google_event_calendar_id=google_event_calendar_id,
+        created_at_utc=datetime.now(timezone.utc),
+    )
+
     db.add(reservation)
     db.commit()
 
     return ReservationCreateResult(
         reference=reference,
+        cancel_token=cancel_token,
         status="confirmed",
         start_iso=payload.start_iso.isoformat(),
         end_iso=end_dt.isoformat(),
+    )
+
+
+@app.post("/v1/reservations/cancel", response_model=ReservationCancelResult, dependencies=[Depends(require_api_key)])
+def cancel_reservation(payload: ReservationCancelRequest, db: Session = Depends(get_db)) -> ReservationCancelResult:
+    stmt = select(Reservation).where(Reservation.cancel_token == payload.cancel_token)
+    reservation = db.execute(stmt).scalar_one_or_none()
+    if reservation is None:
+        raise HTTPException(status_code=404, detail="Cancellation token is invalid")
+
+    if reservation.status == "cancelled":
+        return ReservationCancelResult(
+            already_cancelled=True,
+            reference=reservation.reference,
+            name=reservation.name,
+            email=reservation.email,
+            timezone=reservation.timezone,
+            cancellation_reason=reservation.cancellation_reason,
+            cancellation_message=reservation.cancellation_message,
+            status="cancelled",
+            start_iso=reservation.start_utc.astimezone(timezone.utc).isoformat(),
+            end_iso=reservation.end_utc.astimezone(timezone.utc).isoformat(),
+        )
+
+    if reservation.status not in ("confirmed", "held"):
+        raise HTTPException(status_code=409, detail="Reservation can no longer be cancelled")
+
+    _delete_google_calendar_event(
+        calendar_id=reservation.google_event_calendar_id,
+        event_id=reservation.google_event_id,
+    )
+
+    reservation.status = "cancelled"
+    reservation.cancellation_reason = payload.reason.strip()
+    reservation.cancellation_message = payload.message.strip()
+    reservation.cancelled_at_utc = datetime.now(timezone.utc)
+    db.add(reservation)
+    db.commit()
+
+    return ReservationCancelResult(
+        already_cancelled=False,
+        reference=reservation.reference,
+        name=reservation.name,
+        email=reservation.email,
+        timezone=reservation.timezone,
+        cancellation_reason=reservation.cancellation_reason,
+        cancellation_message=reservation.cancellation_message,
+        status="cancelled",
+        start_iso=reservation.start_utc.astimezone(timezone.utc).isoformat(),
+        end_iso=reservation.end_utc.astimezone(timezone.utc).isoformat(),
     )
 
 

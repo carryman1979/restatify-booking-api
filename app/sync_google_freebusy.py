@@ -287,13 +287,45 @@ def run() -> None:
 
     result = service.freebusy().query(body=body).execute()
 
+    calendars_data = (result or {}).get("calendars", {})
+    if not isinstance(calendars_data, dict):
+        calendars_data = {}
+
+    inaccessible_calendars: list[tuple[str, str]] = []
+    for calendar_id in calendars:
+        payload = calendars_data.get(calendar_id, {})
+        if not isinstance(payload, dict):
+            inaccessible_calendars.append((calendar_id, "missing-response"))
+            continue
+
+        errors = payload.get("errors", [])
+        if not isinstance(errors, list) or len(errors) == 0:
+            continue
+
+        reasons = []
+        for err in errors:
+            if not isinstance(err, dict):
+                continue
+            reason = str(err.get("reason", "unknown")).strip() or "unknown"
+            reasons.append(reason)
+
+        inaccessible_calendars.append((calendar_id, ",".join(reasons) if len(reasons) > 0 else "unknown"))
+
+    if len(inaccessible_calendars) > 0:
+        details = "; ".join([f"{calendar_id} ({reason})" for calendar_id, reason in inaccessible_calendars])
+        print(f"Google sync aborted: inaccessible calendar sources detected: {details}")
+        # Keep existing busy blocks untouched so we do not accidentally expose false-free slots.
+        return
+
     db = SessionLocal()
     try:
         db.execute(delete(BusyBlock))
 
         fetched_at = datetime.now(timezone.utc)
-        calendars_data = (result or {}).get("calendars", {})
-        for calendar_id, payload in calendars_data.items():
+        for calendar_id in calendars:
+            payload = calendars_data.get(calendar_id, {})
+            if not isinstance(payload, dict):
+                continue
             busy_ranges = payload.get("busy", []) if isinstance(payload, dict) else []
             for busy_range in busy_ranges:
                 start_raw = busy_range.get("start")

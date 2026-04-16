@@ -32,6 +32,26 @@ class ReservationCreateRequest(BaseModel):
 
 class ReservationCreateResult(BaseModel):
     reference: str
+    cancel_token: str = Field(default="", max_length=80)
+    status: str
+    start_iso: str
+    end_iso: str
+
+
+class ReservationCancelRequest(BaseModel):
+    cancel_token: str = Field(min_length=12, max_length=80)
+    reason: str = Field(default="", max_length=120)
+    message: str = Field(default="", max_length=1000)
+
+
+class ReservationCancelResult(BaseModel):
+    already_cancelled: bool = False
+    reference: str
+    name: str
+    email: EmailStr
+    timezone: str
+    cancellation_reason: str = Field(default="", max_length=120)
+    cancellation_message: str = Field(default="", max_length=1000)
     status: str
     start_iso: str
     end_iso: str

@@ -2,7 +2,7 @@
 
 Small self-hosted API for searching free slots and creating reservations.
 
-Version: 1.1.2
+Version: 1.2.0
 
 ## Features
 
@@ -10,6 +10,8 @@ Version: 1.1.2
 - Slot search based on workday hours and existing reservations
 - Reservation creation with conflict checks
 - Automatic Google Calendar event creation after successful reservation
+- Cancellation tokens with API-backed reservation cancellation
+- Cancellation endpoint returns subscriber context for WordPress confirmation mails
 - PostgreSQL-ready via `DATABASE_URL`
 - Google Calendar Free/Busy sync worker via cron (`app.sync_google_freebusy`)
 - Weekly availability rules with multiple daily windows (for lunch breaks etc.)
@@ -30,6 +32,7 @@ Version: 1.1.2
 - `GET /health`
 - `POST /v1/slots/search`
 - `POST /v1/reservations`
+- `POST /v1/reservations/cancel`
 - `GET /v1/config/sync`
 - `PUT /v1/config/sync`
 
@@ -47,6 +50,10 @@ During sync, overlaps between local reservations and fetched Google busy windows
 
 When a reservation is created, the API also creates a Google Calendar event (unless disabled).
 The service account must have at least "Make changes to events" access on the target calendar.
+
+When a reservation is cancelled via `POST /v1/reservations/cancel`, the API marks the reservation as
+`cancelled`, stores cancellation reason/message, and deletes the Google Calendar event if event metadata
+is available.
 
 ## Google reservation write env vars
 
@@ -151,5 +158,5 @@ This API already exposes the contract needed by the WordPress booking plugin and
 Create a release archive from repository root:
 
 ```bash
-tar -czf release/restatify-booking-api-1.1.2.tar.gz --exclude='.git' .
+tar -czf release/restatify-booking-api-1.2.0.tar.gz --exclude='.git' .
 ```

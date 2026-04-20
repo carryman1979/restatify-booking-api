@@ -2,7 +2,7 @@
 
 Small self-hosted API for searching free slots and creating reservations.
 
-Version: 1.2.0
+Version: 1.2.1
 
 ## Features
 
@@ -158,5 +158,5 @@ This API already exposes the contract needed by the WordPress booking plugin and
 Create a release archive from repository root:
 
 ```bash
-tar -czf release/restatify-booking-api-1.2.0.tar.gz --exclude='.git' .
+tar -czf release/restatify-booking-api-1.2.1.tar.gz --exclude='.git' .
 ```

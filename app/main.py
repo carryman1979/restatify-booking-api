@@ -70,6 +70,76 @@ def _get_google_calendar_ids_for_check() -> list[str]:
     return merged
 
 
+def _get_google_calendar_ids_for_live_check() -> list[str]:
+    sync_config = load_sync_config()
+    calendar_sources = sync_config.get("calendar_sources", []) if isinstance(sync_config, dict) else []
+
+    plugin_ids = [
+        str(item.get("calendar_id", "")).strip()
+        for item in calendar_sources
+        if isinstance(item, dict)
+        and str(item.get("calendar_id", "")).strip() != ""
+        and str(item.get("calendar_type", "general")).strip().lower() != "holiday"
+    ]
+
+    env_ids = [item.strip() for item in settings.google_calendar_ids.split(",") if item.strip() != ""]
+
+    merged: list[str] = []
+    seen: set[str] = set()
+    for calendar_id in env_ids + plugin_ids:
+        if calendar_id in seen:
+            continue
+        seen.add(calendar_id)
+        merged.append(calendar_id)
+
+    return merged
+
+
+def _get_google_holiday_calendar_ids_for_live_check() -> list[str]:
+    sync_config = load_sync_config()
+    calendar_sources = sync_config.get("calendar_sources", []) if isinstance(sync_config, dict) else []
+
+    merged: list[str] = []
+    seen: set[str] = set()
+    for item in calendar_sources:
+        if not isinstance(item, dict):
+            continue
+
+        calendar_id = str(item.get("calendar_id", "")).strip()
+        if calendar_id == "":
+            continue
+
+        calendar_type = str(item.get("calendar_type", "general")).strip().lower()
+        if calendar_type != "holiday":
+            continue
+
+        if calendar_id in seen:
+            continue
+
+        seen.add(calendar_id)
+        merged.append(calendar_id)
+
+    return merged
+
+
+def _get_google_calendar_source_map() -> dict[str, dict]:
+    sync_config = load_sync_config()
+    calendar_sources = sync_config.get("calendar_sources", []) if isinstance(sync_config, dict) else []
+
+    source_map: dict[str, dict] = {}
+    for item in calendar_sources:
+        if not isinstance(item, dict):
+            continue
+
+        calendar_id = str(item.get("calendar_id", "")).strip()
+        if calendar_id == "":
+            continue
+
+        source_map[calendar_id] = item
+
+    return source_map
+
+
 def _get_google_calendar_id_for_write() -> str:
     sync_config = load_sync_config()
     configured = str(sync_config.get("write_calendar_id", "")).strip()
@@ -92,11 +162,42 @@ def _ensure_booking_backend_configured() -> None:
     )
 
 
-def _has_google_live_conflict(start_utc: datetime, end_utc: datetime) -> bool:
+def _parse_google_time_value(raw_value: str) -> datetime:
+    return datetime.fromisoformat(raw_value.replace("Z", "+00:00")).astimezone(timezone.utc)
+
+
+def _parse_google_event_time_data(payload: dict) -> datetime | None:
+    if not isinstance(payload, dict):
+        return None
+
+    date_time_raw = str(payload.get("dateTime") or "").strip()
+    if date_time_raw != "":
+        try:
+            return _parse_google_time_value(date_time_raw)
+        except ValueError:
+            return None
+
+    date_raw = str(payload.get("date") or "").strip()
+    if date_raw == "":
+        return None
+
+    try:
+        return _parse_google_time_value(f"{date_raw}T00:00:00+00:00")
+    except ValueError:
+        return None
+
+
+def _is_google_all_day_range(start_utc: datetime, end_utc: datetime) -> bool:
+    total_seconds = int((end_utc - start_utc).total_seconds())
+    return total_seconds > 0 and total_seconds % 86400 == 0
+
+
+def _ensure_no_google_live_conflict(start_utc: datetime, end_utc: datetime) -> None:
     credentials_json = settings.google_credentials_json.strip()
-    calendar_ids = _get_google_calendar_ids_for_check()
-    if credentials_json == "" or len(calendar_ids) == 0:
-        return False
+    general_calendar_ids = _get_google_calendar_ids_for_live_check()
+    holiday_calendar_ids = _get_google_holiday_calendar_ids_for_live_check()
+    if credentials_json == "" or (len(general_calendar_ids) == 0 and len(holiday_calendar_ids) == 0):
+        return
 
     try:
         creds_payload = json.loads(credentials_json)
@@ -105,55 +206,117 @@ def _has_google_live_conflict(start_utc: datetime, end_utc: datetime) -> bool:
             scopes=["https://www.googleapis.com/auth/calendar.readonly"],
         )
         service = build("calendar", "v3", credentials=credentials, cache_discovery=False)
-        result = service.freebusy().query(
-            body={
-                "timeMin": start_utc.isoformat(),
-                "timeMax": end_utc.isoformat(),
-                "items": [{"id": cal_id} for cal_id in calendar_ids],
-            }
-        ).execute()
     except Exception as exc:
         # Keep reservation flow available if Google check cannot be reached.
         print(f"Google live conflict check failed: {exc}")
-        return False
+        return
 
-    calendars_data = (result or {}).get("calendars", {})
-    if not isinstance(calendars_data, dict):
-        calendars_data = {}
+    inaccessible_general_calendars: list[str] = []
+    inaccessible_holiday_calendars: list[str] = []
+    if len(general_calendar_ids) > 0:
+        try:
+            result = service.freebusy().query(
+                body={
+                    "timeMin": start_utc.isoformat(),
+                    "timeMax": end_utc.isoformat(),
+                    "items": [{"id": cal_id} for cal_id in general_calendar_ids],
+                }
+            ).execute()
+        except Exception as exc:
+            print(f"Google live free/busy check failed: {exc}")
+            result = {}
 
-    inaccessible_calendars: list[str] = []
-    for calendar_id in calendar_ids:
-        payload = calendars_data.get(calendar_id, {})
-        if not isinstance(payload, dict):
-            inaccessible_calendars.append(calendar_id)
-            continue
+        calendars_data = (result or {}).get("calendars", {})
+        if not isinstance(calendars_data, dict):
+            calendars_data = {}
 
-        errors = payload.get("errors", [])
-        if isinstance(errors, list) and len(errors) > 0:
-            inaccessible_calendars.append(calendar_id)
-            continue
-
-        busy_ranges = payload.get("busy", []) if isinstance(payload, dict) else []
-        for busy_range in busy_ranges:
-            start_raw = str(busy_range.get("start") or "").strip()
-            end_raw = str(busy_range.get("end") or "").strip()
-            if start_raw == "" or end_raw == "":
-                continue
-            try:
-                busy_start = datetime.fromisoformat(start_raw.replace("Z", "+00:00")).astimezone(timezone.utc)
-                busy_end = datetime.fromisoformat(end_raw.replace("Z", "+00:00")).astimezone(timezone.utc)
-            except ValueError:
+        for calendar_id in general_calendar_ids:
+            payload = calendars_data.get(calendar_id, {})
+            if not isinstance(payload, dict):
+                inaccessible_general_calendars.append(calendar_id)
                 continue
 
-            if _has_time_overlap(start_utc, end_utc, busy_start, busy_end):
-                return True
+            errors = payload.get("errors", [])
+            if isinstance(errors, list) and len(errors) > 0:
+                inaccessible_general_calendars.append(calendar_id)
+                continue
 
-    if len(inaccessible_calendars) > 0:
-        print(f"Google live conflict check failed for configured calendars: {', '.join(inaccessible_calendars)}")
-        # Fail-safe: if configured calendars cannot be checked, block booking to avoid overbooking.
-        return True
+            busy_ranges = payload.get("busy", []) if isinstance(payload, dict) else []
+            for busy_range in busy_ranges:
+                start_raw = str(busy_range.get("start") or "").strip()
+                end_raw = str(busy_range.get("end") or "").strip()
+                if start_raw == "" or end_raw == "":
+                    continue
+                try:
+                    busy_start = _parse_google_time_value(start_raw)
+                    busy_end = _parse_google_time_value(end_raw)
+                except ValueError:
+                    continue
 
-    return False
+                if not _has_time_overlap(start_utc, end_utc, busy_start, busy_end):
+                    continue
+
+                if _is_google_all_day_range(busy_start, busy_end):
+                    continue
+
+                raise HTTPException(status_code=409, detail="Slot conflicts with current Google calendar data")
+
+    for calendar_id in holiday_calendar_ids:
+        try:
+            events_result = (
+                service.events()
+                .list(
+                    calendarId=calendar_id,
+                    timeMin=start_utc.isoformat(),
+                    timeMax=end_utc.isoformat(),
+                    singleEvents=True,
+                    orderBy="startTime",
+                )
+                .execute()
+            )
+        except HttpError:
+            inaccessible_holiday_calendars.append(calendar_id)
+            continue
+        except Exception as exc:
+            print(f"Google live holiday check failed for {calendar_id}: {exc}")
+            inaccessible_holiday_calendars.append(calendar_id)
+            continue
+
+        items = events_result.get("items", []) if isinstance(events_result, dict) else []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+
+            start_payload = item.get("start", {})
+            end_payload = item.get("end", {})
+            event_start = _parse_google_event_time_data(start_payload)
+            event_end = _parse_google_event_time_data(end_payload)
+            if event_start is None or event_end is None or event_end <= event_start:
+                continue
+
+            if _has_time_overlap(start_utc, end_utc, event_start, event_end):
+                raise HTTPException(status_code=409, detail="Slot conflicts with current Google calendar data")
+
+    if len(inaccessible_general_calendars) > 0 or len(inaccessible_holiday_calendars) > 0:
+        detail_parts: list[str] = []
+        if len(inaccessible_general_calendars) > 0:
+            detail_parts.append(
+                "general calendars via FreeBusy: " + ", ".join(inaccessible_general_calendars)
+            )
+        if len(inaccessible_holiday_calendars) > 0:
+            detail_parts.append(
+                "holiday calendars via Events API: " + ", ".join(inaccessible_holiday_calendars)
+            )
+
+        details = "; ".join(detail_parts)
+        print(f"Google live conflict check failed for configured calendars: {details}")
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Google calendar access check failed during live verification. "
+                f"Please verify service account access for {details}"
+            ),
+        )
 
 
 def _create_google_calendar_event(
@@ -310,8 +473,7 @@ def create_reservation(payload: ReservationCreateRequest, db: Session = Depends(
         raise HTTPException(status_code=409, detail="Slot is already reserved")
 
     # Optional live Google check catches manual calendar changes between polling runs.
-    if _has_google_live_conflict(start_utc, end_utc):
-        raise HTTPException(status_code=409, detail="Slot conflicts with current Google calendar data")
+    _ensure_no_google_live_conflict(start_utc, end_utc)
 
     reference = "RBK-" + secrets.token_hex(5).upper()
     cancel_token = secrets.token_urlsafe(24)

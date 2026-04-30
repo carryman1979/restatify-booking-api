@@ -28,9 +28,8 @@ Dadurch bleibt die geschäftslogische Terminverarbeitung zentral in der API und 
 
 ## Aktueller Status
 
-Im zuletzt bearbeiteten Änderungsblock gab es keinen neuen separaten Release-Inhalt für die Booking API. Die jüngsten sichtbaren Änderungen betrafen vor allem:
+Die API bleibt zentrales Backend-System fuer Slot-Suche, Reservierungen und Sync-Logik. Fuer den aktuellen Stand wurde ein operativer Smoke-Test-Workflow ergänzt.
 
-- den Booking Assistant im WordPress-Backend
-- das Multi Chat Overlay als Wartungsrelease für bessere IDE-Kompatibilität
+## Releases
 
-Die API bleibt damit in der Wiki-Dokumentation als zentrales Backend-System eingeordnet, ohne für diesen Stand einen zusätzlichen neuen Release-Eintrag zu benötigen.
+- [Release 1.2.2](Release-1.2.2)

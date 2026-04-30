@@ -28,7 +28,23 @@ Services:
 - Slot search (PowerShell example):
   - `Invoke-RestMethod -Method Post -Uri http://localhost:8088/v1/slots/search -Headers @{ 'X-API-Key'='change-me-local' } -ContentType 'application/json' -Body '{"start_iso":"2026-04-03T09:00:00+02:00","end_iso":"2026-04-10T09:00:00+02:00","duration_minutes":30,"timezone":"Europe/Berlin"}'`
 
-## 5) Stop stack
+## 5) One-command smoke test
+
+From repository root:
+
+- `chmod +x scripts/health-sync-check.sh`
+- `API_BASE_URL="http://127.0.0.1:8088" API_KEY="change-me-local" scripts/health-sync-check.sh`
+
+Optional (force one sync worker run first):
+
+- `API_BASE_URL="http://127.0.0.1:8088" API_KEY="change-me-local" scripts/health-sync-check.sh -w`
+
+Meaningful exit codes:
+
+- `0`: all checks passed
+- `2`: API reachable but `calendar_sources` is empty in sync config
+
+## 6) Stop stack
 
 - Run: `docker compose down`
 - Remove volumes too (optional reset): `docker compose down -v`

@@ -2,7 +2,7 @@
 
 Small self-hosted API for searching free slots and creating reservations.
 
-Version: 1.2.1
+Version: 1.2.2
 
 ## Features
 
@@ -136,6 +136,26 @@ docker compose --profile manual run --rm sync
 
 See `RUNBOOK.md` for detailed local test commands.
 
+## Operational smoke test script
+
+Use the bundled script to verify health, authenticated config access and slot-search behavior from one command.
+
+```bash
+chmod +x scripts/health-sync-check.sh
+API_BASE_URL="https://api.restatify.tech" API_KEY="<your-key>" scripts/health-sync-check.sh
+```
+
+Optional: run one sync worker pass first.
+
+```bash
+API_BASE_URL="https://api.restatify.tech" API_KEY="<your-key>" scripts/health-sync-check.sh -w
+```
+
+Notes:
+
+- Exit code `2` means `calendar_sources` is empty in `/v1/config/sync`.
+- Set `CURL_INSECURE=1` only for temporary self-signed lab setups.
+
 For production-like Docker Compose with VPN + HTTPS, see `DOCKER_COMPOSE_VPN_HTTPS_GUIDE.md`.
 
 ## Production install
@@ -158,5 +178,5 @@ This API already exposes the contract needed by the WordPress booking plugin and
 Create a release archive from repository root:
 
 ```bash
-tar -czf release/restatify-booking-api-1.2.1.tar.gz --exclude='.git' .
+tar -czf release/restatify-booking-api-1.2.2.tar.gz --exclude='.git' .
 ```

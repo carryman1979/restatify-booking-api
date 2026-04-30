@@ -15,3 +15,7 @@ __pycache__/
 *.db
 sync-state.json
 sync-config.json
+
+# Security scan artifacts
+gitleaks-*.json
+gitleaks-*.sarif

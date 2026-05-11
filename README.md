@@ -2,7 +2,7 @@
 
 Small self-hosted API for searching free slots and creating reservations.
 
-Version: 1.2.2
+Version: 1.2.3
 
 ## Features
 
@@ -180,3 +180,7 @@ Create a release archive from repository root:
 ```bash
 tar -czf release/restatify-booking-api-1.2.2.tar.gz --exclude='.git' .
 ```
+
+Recommended current artifact:
+
+- `release/restatify-booking-api-1.2.3.tar.gz`

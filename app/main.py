@@ -26,10 +26,17 @@ from app.schemas import (
     SlotSearchRequest,
     SlotSearchResult,
 )
+from app.shared.error_contract import BookingApiErrorCode, api_error
+from app.shared.time_utils import (
+    has_time_overlap,
+    is_google_all_day_range,
+    parse_google_event_time_data,
+    parse_google_time_value,
+)
 from app.services.config_store import load_sync_config, save_sync_config
 from app.services.slots import search_slots
 
-app = FastAPI(title="Restatify Booking API", version="1.2.2")
+app = FastAPI(title="Restatify Booking API", version="1.2.3")
 
 
 @app.on_event("startup")
@@ -41,11 +48,7 @@ def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
     if not settings.api_key:
         return
     if x_api_key != settings.api_key:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-
-
-def _has_time_overlap(start_a: datetime, end_a: datetime, start_b: datetime, end_b: datetime) -> bool:
-    return start_a < end_b and start_b < end_a
+        raise api_error(401, BookingApiErrorCode.INVALID_API_KEY, "Invalid API key")
 
 
 def _get_google_calendar_ids_for_check() -> list[str]:
@@ -156,40 +159,11 @@ def _ensure_booking_backend_configured() -> None:
     if _is_booking_backend_configured():
         return
 
-    raise HTTPException(
-        status_code=503,
-        detail="Booking backend is currently unavailable. Please try again later.",
+    raise api_error(
+        503,
+        BookingApiErrorCode.BACKEND_UNAVAILABLE,
+        "Booking backend is currently unavailable. Please try again later.",
     )
-
-
-def _parse_google_time_value(raw_value: str) -> datetime:
-    return datetime.fromisoformat(raw_value.replace("Z", "+00:00")).astimezone(timezone.utc)
-
-
-def _parse_google_event_time_data(payload: dict) -> datetime | None:
-    if not isinstance(payload, dict):
-        return None
-
-    date_time_raw = str(payload.get("dateTime") or "").strip()
-    if date_time_raw != "":
-        try:
-            return _parse_google_time_value(date_time_raw)
-        except ValueError:
-            return None
-
-    date_raw = str(payload.get("date") or "").strip()
-    if date_raw == "":
-        return None
-
-    try:
-        return _parse_google_time_value(f"{date_raw}T00:00:00+00:00")
-    except ValueError:
-        return None
-
-
-def _is_google_all_day_range(start_utc: datetime, end_utc: datetime) -> bool:
-    total_seconds = int((end_utc - start_utc).total_seconds())
-    return total_seconds > 0 and total_seconds % 86400 == 0
 
 
 def _ensure_no_google_live_conflict(start_utc: datetime, end_utc: datetime) -> None:
@@ -248,18 +222,18 @@ def _ensure_no_google_live_conflict(start_utc: datetime, end_utc: datetime) -> N
                 if start_raw == "" or end_raw == "":
                     continue
                 try:
-                    busy_start = _parse_google_time_value(start_raw)
-                    busy_end = _parse_google_time_value(end_raw)
+                    busy_start = parse_google_time_value(start_raw)
+                    busy_end = parse_google_time_value(end_raw)
                 except ValueError:
                     continue
 
-                if not _has_time_overlap(start_utc, end_utc, busy_start, busy_end):
+                if not has_time_overlap(start_utc, end_utc, busy_start, busy_end):
                     continue
 
-                if _is_google_all_day_range(busy_start, busy_end):
+                if is_google_all_day_range(busy_start, busy_end):
                     continue
 
-                raise HTTPException(status_code=409, detail="Slot conflicts with current Google calendar data")
+                raise api_error(409, BookingApiErrorCode.GOOGLE_SLOT_CONFLICT, "Slot conflicts with current Google calendar data")
 
     for calendar_id in holiday_calendar_ids:
         try:
@@ -289,13 +263,13 @@ def _ensure_no_google_live_conflict(start_utc: datetime, end_utc: datetime) -> N
 
             start_payload = item.get("start", {})
             end_payload = item.get("end", {})
-            event_start = _parse_google_event_time_data(start_payload)
-            event_end = _parse_google_event_time_data(end_payload)
+            event_start = parse_google_event_time_data(start_payload)
+            event_end = parse_google_event_time_data(end_payload)
             if event_start is None or event_end is None or event_end <= event_start:
                 continue
 
-            if _has_time_overlap(start_utc, end_utc, event_start, event_end):
-                raise HTTPException(status_code=409, detail="Slot conflicts with current Google calendar data")
+            if has_time_overlap(start_utc, end_utc, event_start, event_end):
+                raise api_error(409, BookingApiErrorCode.GOOGLE_SLOT_CONFLICT, "Slot conflicts with current Google calendar data")
 
     if len(inaccessible_general_calendars) > 0 or len(inaccessible_holiday_calendars) > 0:
         detail_parts: list[str] = []
@@ -310,9 +284,10 @@ def _ensure_no_google_live_conflict(start_utc: datetime, end_utc: datetime) -> N
 
         details = "; ".join(detail_parts)
         print(f"Google live conflict check failed for configured calendars: {details}")
-        raise HTTPException(
-            status_code=503,
-            detail=(
+        raise api_error(
+            503,
+            BookingApiErrorCode.BACKEND_UNAVAILABLE,
+            (
                 "Google calendar access check failed during live verification. "
                 f"Please verify service account access for {details}"
             ),
@@ -455,7 +430,7 @@ def create_reservation(payload: ReservationCreateRequest, db: Session = Depends(
 
     start_dt = payload.start_iso
     if start_dt.tzinfo is None:
-        raise HTTPException(status_code=400, detail="start_iso must include timezone")
+        raise api_error(400, BookingApiErrorCode.START_ISO_TIMEZONE_REQUIRED, "start_iso must include timezone")
 
     end_dt = start_dt + timedelta(minutes=payload.duration_minutes)
 
@@ -463,14 +438,14 @@ def create_reservation(payload: ReservationCreateRequest, db: Session = Depends(
     start_key = payload.start_iso.isoformat()
     is_available = any(item["start_iso"] == start_key for item in existing)
     if not is_available:
-        raise HTTPException(status_code=409, detail="Slot is no longer available")
+        raise api_error(409, BookingApiErrorCode.SLOT_UNAVAILABLE, "Slot is no longer available")
 
     start_utc = start_dt.astimezone(timezone.utc)
     end_utc = end_dt.astimezone(timezone.utc)
 
     # Recheck overlap right before commit to reduce race-condition double-bookings.
     if _has_local_reservation_overlap(db, start_utc, end_utc):
-        raise HTTPException(status_code=409, detail="Slot is already reserved")
+        raise api_error(409, BookingApiErrorCode.SLOT_RESERVED, "Slot is already reserved")
 
     # Optional live Google check catches manual calendar changes between polling runs.
     _ensure_no_google_live_conflict(start_utc, end_utc)
@@ -522,7 +497,7 @@ def cancel_reservation(payload: ReservationCancelRequest, db: Session = Depends(
     stmt = select(Reservation).where(Reservation.cancel_token == payload.cancel_token)
     reservation = db.execute(stmt).scalar_one_or_none()
     if reservation is None:
-        raise HTTPException(status_code=404, detail="Cancellation token is invalid")
+        raise api_error(404, BookingApiErrorCode.CANCELLATION_TOKEN_INVALID, "Cancellation token is invalid")
 
     if reservation.status == "cancelled":
         return ReservationCancelResult(
@@ -539,7 +514,7 @@ def cancel_reservation(payload: ReservationCancelRequest, db: Session = Depends(
         )
 
     if reservation.status not in ("confirmed", "held"):
-        raise HTTPException(status_code=409, detail="Reservation can no longer be cancelled")
+        raise api_error(409, BookingApiErrorCode.CANCELLATION_NOT_ALLOWED, "Reservation can no longer be cancelled")
 
     _delete_google_calendar_event(
         calendar_id=reservation.google_event_calendar_id,

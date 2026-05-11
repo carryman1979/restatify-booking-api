@@ -32,4 +32,5 @@ Die API bleibt zentrales Backend-System fuer Slot-Suche, Reservierungen und Sync
 
 ## Releases
 
+- [Release 1.2.3](Release-1.2.3)
 - [Release 1.2.2](Release-1.2.2)

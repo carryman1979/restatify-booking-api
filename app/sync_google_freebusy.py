@@ -14,6 +14,7 @@ from sqlalchemy import and_, delete, or_, select
 from app.config import settings
 from app.db import SessionLocal, engine
 from app.models import Base, BookingConflict, BusyBlock, Reservation
+from app.shared.time_utils import has_time_overlap, parse_google_time_value
 from app.services.config_store import load_sync_config
 
 
@@ -37,14 +38,6 @@ def _should_run(sync_interval_minutes: int) -> bool:
 def _mark_run() -> None:
     payload = {"last_sync_utc": datetime.now(timezone.utc).isoformat()}
     SYNC_STATE_PATH.write_text(json.dumps(payload, ensure_ascii=True), encoding="utf-8")
-
-
-def _parse_google_event_time(raw_value: str) -> datetime:
-    return datetime.fromisoformat(raw_value.replace("Z", "+00:00")).astimezone(timezone.utc)
-
-
-def _has_overlap(start_a: datetime, end_a: datetime, start_b: datetime, end_b: datetime) -> bool:
-    return start_a < end_b and start_b < end_a
 
 
 def _build_conflict_key(
@@ -147,7 +140,7 @@ def _detect_and_store_conflicts(db, now_utc: datetime, max_utc: datetime) -> Non
     detected: dict[str, dict] = {}
     for reservation in reservations:
         for block in busy_blocks:
-            if not _has_overlap(reservation.start_utc, reservation.end_utc, block.start_utc, block.end_utc):
+            if not has_time_overlap(reservation.start_utc, reservation.end_utc, block.start_utc, block.end_utc):
                 continue
 
             key = _build_conflict_key(
@@ -333,8 +326,8 @@ def run() -> None:
                 if not start_raw or not end_raw:
                     continue
 
-                start_utc = _parse_google_event_time(start_raw)
-                end_utc = _parse_google_event_time(end_raw)
+                start_utc = parse_google_time_value(start_raw)
+                end_utc = parse_google_time_value(end_raw)
                 if end_utc <= start_utc:
                     continue
 
@@ -385,8 +378,8 @@ def run() -> None:
                     end_raw = f"{end_date}T00:00:00+00:00"
 
                 try:
-                    start_utc = _parse_google_event_time(start_raw)
-                    end_utc = _parse_google_event_time(end_raw)
+                    start_utc = parse_google_time_value(start_raw)
+                    end_utc = parse_google_time_value(end_raw)
                 except ValueError:
                     continue
 

@@ -30,6 +30,11 @@ Dadurch bleibt die geschäftslogische Terminverarbeitung zentral in der API und 
 
 Die API bleibt zentrales Backend-System fuer Slot-Suche, Reservierungen und Sync-Logik. Fuer den aktuellen Stand wurde ein operativer Smoke-Test-Workflow ergänzt.
 
+Release-Prep Status (2026-05-30):
+
+- Dokumentation und Release-Notizen fuer den koordinierten Multi-Repo-Rollout auf den 1.2.3-Hotfix-Stand synchronisiert.
+- Kein Versionssprung im API-Release-Zyklus.
+
 ## Releases
 
 - [Release 1.2.3](Release-1.2.3)

@@ -178,9 +178,15 @@ This API already exposes the contract needed by the WordPress booking plugin and
 Create a release archive from repository root:
 
 ```bash
-tar -czf release/restatify-booking-api-1.2.2.tar.gz --exclude='.git' .
+tar -czf release/restatify-booking-api-1.2.3.tar.gz --exclude='.git' .
 ```
 
 Recommended current artifact:
 
 - `release/restatify-booking-api-1.2.3.tar.gz`
+
+## Release-prep status (2026-05-30)
+
+- No version bump: release prep remains on `1.2.3`.
+- README/wiki/release-note set refreshed for coordinated multi-repo rollout.
+- Local release artifact rebuilt and kept aligned with current maintenance branch state.

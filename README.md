@@ -2,7 +2,7 @@
 
 Small self-hosted API for searching free slots and creating reservations.
 
-Version: 1.2.3
+Version: 1.2.4
 
 ## Features
 
@@ -190,3 +190,4 @@ Recommended current artifact:
 - No version bump: release prep remains on `1.2.3`.
 - README/wiki/release-note set refreshed for coordinated multi-repo rollout.
 - Local release artifact rebuilt and kept aligned with current maintenance branch state.
+

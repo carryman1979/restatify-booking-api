@@ -32,8 +32,8 @@ Die API bleibt zentrales Backend-System fuer Slot-Suche, Reservierungen und Sync
 
 Release-Prep Status (2026-05-30):
 
-- Dokumentation und Release-Notizen fuer den koordinierten Multi-Repo-Rollout auf den 1.2.3-Hotfix-Stand synchronisiert.
-- Kein Versionssprung im API-Release-Zyklus.
+- Dokumentation und Release-Notizen fuer den koordinierten Multi-Repo-Rollout auf Version 1.2.4 synchronisiert.
+- Release-Artefakt fuer 1.2.4 wurde neu gebaut und als aktueller Stand veroeffentlicht.
 
 - [Release 1.2.4](Release-1.2.4)
 - [Release 1.2.3](Release-1.2.3)

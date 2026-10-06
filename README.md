@@ -142,13 +142,13 @@ Use the bundled script to verify health, authenticated config access and slot-se
 
 ```bash
 chmod +x scripts/health-sync-check.sh
-API_BASE_URL="https://api.restatify.tech" API_KEY="<your-key>" scripts/health-sync-check.sh
+API_BASE_URL="https://api.example.test" API_KEY="<your-key>" scripts/health-sync-check.sh
 ```
 
 Optional: run one sync worker pass first.
 
 ```bash
-API_BASE_URL="https://api.restatify.tech" API_KEY="<your-key>" scripts/health-sync-check.sh -w
+API_BASE_URL="https://api.example.test" API_KEY="<your-key>" scripts/health-sync-check.sh -w
 ```
 
 Notes:

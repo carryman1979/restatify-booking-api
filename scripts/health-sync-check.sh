@@ -22,7 +22,7 @@ Options:
   -w  Run python sync worker once before API tests
 
 Environment:
-  API_BASE_URL      API base URL, e.g. https://api.restatify.tech
+  API_BASE_URL      API base URL, e.g. https://api.example.test
   API_KEY           API key used for authenticated checks
   TIMEZONE          Timezone for slot check payload (default: Europe/Berlin)
   DURATION_MINUTES  Slot duration for slot check (default: 60)

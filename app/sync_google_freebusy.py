@@ -8,14 +8,18 @@ from email.message import EmailMessage
 from pathlib import Path
 
 from google.oauth2.service_account import Credentials
+from google.auth.exceptions import GoogleAuthError
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+from httplib2 import HttpLib2Error
 from sqlalchemy import and_, delete, or_, select
 
 from app.config import settings
 from app.db import SessionLocal, engine
 from app.models import Base, BookingConflict, BusyBlock, Reservation
-from app.shared.time_utils import has_time_overlap, parse_google_time_value
+from app.shared.time_utils import has_time_overlap, parse_google_busy_response
 from app.services.config_store import load_sync_config
+from app.services.google_availability import fetch_holiday_busy_ranges
 
 
 SYNC_STATE_PATH = Path("./sync-state.json")
@@ -280,35 +284,21 @@ def run() -> None:
 
     result = service.freebusy().query(body=body).execute()
 
-    calendars_data = (result or {}).get("calendars", {})
-    if not isinstance(calendars_data, dict):
-        calendars_data = {}
-
-    inaccessible_calendars: list[tuple[str, str]] = []
-    for calendar_id in calendars:
-        payload = calendars_data.get(calendar_id, {})
-        if not isinstance(payload, dict):
-            inaccessible_calendars.append((calendar_id, "missing-response"))
-            continue
-
-        errors = payload.get("errors", [])
-        if not isinstance(errors, list) or len(errors) == 0:
-            continue
-
-        reasons = []
-        for err in errors:
-            if not isinstance(err, dict):
-                continue
-            reason = str(err.get("reason", "unknown")).strip() or "unknown"
-            reasons.append(reason)
-
-        inaccessible_calendars.append((calendar_id, ",".join(reasons) if len(reasons) > 0 else "unknown"))
-
-    if len(inaccessible_calendars) > 0:
-        details = "; ".join([f"{calendar_id} ({reason})" for calendar_id, reason in inaccessible_calendars])
-        print(f"Google sync aborted: inaccessible calendar sources detected: {details}")
-        # Keep existing busy blocks untouched so we do not accidentally expose false-free slots.
+    try:
+        busy_by_calendar = parse_google_busy_response(result, calendars)
+    except ValueError as exc:
+        print(f"Google sync aborted; existing busy blocks preserved: {exc}")
         return
+
+    holiday_busy_by_calendar: dict[str, list[tuple[datetime, datetime]]] = {}
+    for calendar_id, source in calendar_source_map.items():
+        if str(source.get("calendar_type", "general")).strip().lower() != "holiday":
+            continue
+        try:
+            holiday_busy_by_calendar[calendar_id] = fetch_holiday_busy_ranges(service, calendar_id, now_utc, max_utc)
+        except (ValueError, GoogleAuthError, HttpError, HttpLib2Error, OSError) as exc:
+            print(f"Google holiday sync aborted; existing busy blocks preserved: {exc}")
+            return
 
     db = SessionLocal()
     try:
@@ -316,21 +306,7 @@ def run() -> None:
 
         fetched_at = datetime.now(timezone.utc)
         for calendar_id in calendars:
-            payload = calendars_data.get(calendar_id, {})
-            if not isinstance(payload, dict):
-                continue
-            busy_ranges = payload.get("busy", []) if isinstance(payload, dict) else []
-            for busy_range in busy_ranges:
-                start_raw = busy_range.get("start")
-                end_raw = busy_range.get("end")
-                if not start_raw or not end_raw:
-                    continue
-
-                start_utc = parse_google_time_value(start_raw)
-                end_utc = parse_google_time_value(end_raw)
-                if end_utc <= start_utc:
-                    continue
-
+            for start_utc, end_utc in busy_by_calendar[calendar_id]:
                 db.add(
                     BusyBlock(
                         source=f"google:{calendar_id}",
@@ -340,52 +316,8 @@ def run() -> None:
                     )
                 )
 
-        # Holiday calendars are treated as hard blockers by importing event ranges directly.
-        for calendar_id, source in calendar_source_map.items():
-            if str(source.get("calendar_type", "general")).strip().lower() != "holiday":
-                continue
-
-            events_result = (
-                service.events()
-                .list(
-                    calendarId=calendar_id,
-                    timeMin=now_utc.isoformat(),
-                    timeMax=max_utc.isoformat(),
-                    singleEvents=True,
-                    orderBy="startTime",
-                )
-                .execute()
-            )
-
-            for item in events_result.get("items", []) if isinstance(events_result, dict) else []:
-                if not isinstance(item, dict):
-                    continue
-
-                start_data = item.get("start", {})
-                end_data = item.get("end", {})
-                if not isinstance(start_data, dict) or not isinstance(end_data, dict):
-                    continue
-
-                start_raw = str(start_data.get("dateTime") or "").strip()
-                end_raw = str(end_data.get("dateTime") or "").strip()
-
-                if start_raw == "" or end_raw == "":
-                    start_date = str(start_data.get("date") or "").strip()
-                    end_date = str(end_data.get("date") or "").strip()
-                    if start_date == "" or end_date == "":
-                        continue
-                    start_raw = f"{start_date}T00:00:00+00:00"
-                    end_raw = f"{end_date}T00:00:00+00:00"
-
-                try:
-                    start_utc = parse_google_time_value(start_raw)
-                    end_utc = parse_google_time_value(end_raw)
-                except ValueError:
-                    continue
-
-                if end_utc <= start_utc:
-                    continue
-
+        for calendar_id, busy_ranges in holiday_busy_by_calendar.items():
+            for start_utc, end_utc in busy_ranges:
                 db.add(
                     BusyBlock(
                         source=f"google-holiday:{calendar_id}",

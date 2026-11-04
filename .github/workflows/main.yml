@@ -29,11 +29,6 @@ jobs:
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: Run unit tests (if present)
+      - name: Run unit tests
         run: |
-          if [ -d tests ]; then
-            python -m pytest -q
-          else
-            echo "No tests directory found; running syntax compile check."
-            python -m compileall app
-          fi
+          python -m unittest discover -s tests -v

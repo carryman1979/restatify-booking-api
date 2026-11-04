@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from google.oauth2.service_account import Credentials
+from google.auth.exceptions import GoogleAuthError
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from httplib2 import HttpLib2Error
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
@@ -29,14 +33,13 @@ from app.schemas import (
 from app.shared.error_contract import BookingApiErrorCode, api_error
 from app.shared.time_utils import (
     has_time_overlap,
-    is_google_all_day_range,
-    parse_google_event_time_data,
-    parse_google_time_value,
+    parse_google_busy_response,
 )
 from app.services.config_store import load_sync_config, save_sync_config
 from app.services.slots import search_slots
+from app.services.google_availability import fetch_holiday_busy_ranges
 
-app = FastAPI(title="Restatify Booking API", version="1.2.3")
+app = FastAPI(title="Restatify Booking API", version="1.2.5")
 
 
 @app.on_event("startup")
@@ -166,12 +169,21 @@ def _ensure_booking_backend_configured() -> None:
     )
 
 
-def _ensure_no_google_live_conflict(start_utc: datetime, end_utc: datetime) -> None:
+def _google_availability_unavailable() -> HTTPException:
+    return api_error(
+        503,
+        BookingApiErrorCode.BACKEND_UNAVAILABLE,
+        "Calendar availability could not be verified. Please try again later.",
+    )
+
+
+def _get_google_live_busy_ranges(start_utc: datetime, end_utc: datetime) -> list[tuple[datetime, datetime]]:
+    """Fetch complete current busy data; an unverified calendar is never free."""
     credentials_json = settings.google_credentials_json.strip()
     general_calendar_ids = _get_google_calendar_ids_for_live_check()
     holiday_calendar_ids = _get_google_holiday_calendar_ids_for_live_check()
     if credentials_json == "" or (len(general_calendar_ids) == 0 and len(holiday_calendar_ids) == 0):
-        return
+        raise _google_availability_unavailable()
 
     try:
         creds_payload = json.loads(credentials_json)
@@ -180,118 +192,45 @@ def _ensure_no_google_live_conflict(start_utc: datetime, end_utc: datetime) -> N
             scopes=["https://www.googleapis.com/auth/calendar.readonly"],
         )
         service = build("calendar", "v3", credentials=credentials, cache_discovery=False)
-    except Exception as exc:
-        # Keep reservation flow available if Google check cannot be reached.
-        print(f"Google live conflict check failed: {exc}")
-        return
+    except (ValueError, TypeError, KeyError, GoogleAuthError, HttpError, HttpLib2Error, OSError) as exc:
+        logging.getLogger(__name__).exception("Google availability client initialization failed")
+        raise _google_availability_unavailable() from exc
 
-    inaccessible_general_calendars: list[str] = []
-    inaccessible_holiday_calendars: list[str] = []
-    if len(general_calendar_ids) > 0:
+    ranges: list[tuple[datetime, datetime]] = []
+    for batch_start in range(0, len(general_calendar_ids), 50):
+        batch = general_calendar_ids[batch_start:batch_start + 50]
         try:
             result = service.freebusy().query(
                 body={
                     "timeMin": start_utc.isoformat(),
                     "timeMax": end_utc.isoformat(),
-                    "items": [{"id": cal_id} for cal_id in general_calendar_ids],
+                    "items": [{"id": cal_id} for cal_id in batch],
                 }
             ).execute()
-        except Exception as exc:
-            print(f"Google live free/busy check failed: {exc}")
-            result = {}
+        except (GoogleAuthError, HttpError, HttpLib2Error, OSError) as exc:
+            logging.getLogger(__name__).exception("Google live FreeBusy request failed")
+            raise _google_availability_unavailable() from exc
 
-        calendars_data = (result or {}).get("calendars", {})
-        if not isinstance(calendars_data, dict):
-            calendars_data = {}
-
-        for calendar_id in general_calendar_ids:
-            payload = calendars_data.get(calendar_id, {})
-            if not isinstance(payload, dict):
-                inaccessible_general_calendars.append(calendar_id)
-                continue
-
-            errors = payload.get("errors", [])
-            if isinstance(errors, list) and len(errors) > 0:
-                inaccessible_general_calendars.append(calendar_id)
-                continue
-
-            busy_ranges = payload.get("busy", []) if isinstance(payload, dict) else []
-            for busy_range in busy_ranges:
-                start_raw = str(busy_range.get("start") or "").strip()
-                end_raw = str(busy_range.get("end") or "").strip()
-                if start_raw == "" or end_raw == "":
-                    continue
-                try:
-                    busy_start = parse_google_time_value(start_raw)
-                    busy_end = parse_google_time_value(end_raw)
-                except ValueError:
-                    continue
-
-                if not has_time_overlap(start_utc, end_utc, busy_start, busy_end):
-                    continue
-
-                if is_google_all_day_range(busy_start, busy_end):
-                    continue
-
-                raise api_error(409, BookingApiErrorCode.GOOGLE_SLOT_CONFLICT, "Slot conflicts with current Google calendar data")
+        try:
+            for busy in parse_google_busy_response(result, batch).values():
+                ranges.extend(busy)
+        except ValueError as exc:
+            logging.getLogger(__name__).warning("Incomplete or invalid Google FreeBusy response")
+            raise _google_availability_unavailable() from exc
 
     for calendar_id in holiday_calendar_ids:
         try:
-            events_result = (
-                service.events()
-                .list(
-                    calendarId=calendar_id,
-                    timeMin=start_utc.isoformat(),
-                    timeMax=end_utc.isoformat(),
-                    singleEvents=True,
-                    orderBy="startTime",
-                )
-                .execute()
-            )
-        except HttpError:
-            inaccessible_holiday_calendars.append(calendar_id)
-            continue
-        except Exception as exc:
-            print(f"Google live holiday check failed for {calendar_id}: {exc}")
-            inaccessible_holiday_calendars.append(calendar_id)
-            continue
+            ranges.extend(fetch_holiday_busy_ranges(service, calendar_id, start_utc, end_utc))
+        except (ValueError, GoogleAuthError, HttpError, HttpLib2Error, OSError) as exc:
+            logging.getLogger(__name__).exception("Google live holiday verification failed")
+            raise _google_availability_unavailable() from exc
+    return ranges
 
-        items = events_result.get("items", []) if isinstance(events_result, dict) else []
-        for item in items:
-            if not isinstance(item, dict):
-                continue
 
-            start_payload = item.get("start", {})
-            end_payload = item.get("end", {})
-            event_start = parse_google_event_time_data(start_payload)
-            event_end = parse_google_event_time_data(end_payload)
-            if event_start is None or event_end is None or event_end <= event_start:
-                continue
-
-            if has_time_overlap(start_utc, end_utc, event_start, event_end):
-                raise api_error(409, BookingApiErrorCode.GOOGLE_SLOT_CONFLICT, "Slot conflicts with current Google calendar data")
-
-    if len(inaccessible_general_calendars) > 0 or len(inaccessible_holiday_calendars) > 0:
-        detail_parts: list[str] = []
-        if len(inaccessible_general_calendars) > 0:
-            detail_parts.append(
-                "general calendars via FreeBusy: " + ", ".join(inaccessible_general_calendars)
-            )
-        if len(inaccessible_holiday_calendars) > 0:
-            detail_parts.append(
-                "holiday calendars via Events API: " + ", ".join(inaccessible_holiday_calendars)
-            )
-
-        details = "; ".join(detail_parts)
-        print(f"Google live conflict check failed for configured calendars: {details}")
-        raise api_error(
-            503,
-            BookingApiErrorCode.BACKEND_UNAVAILABLE,
-            (
-                "Google calendar access check failed during live verification. "
-                f"Please verify service account access for {details}"
-            ),
-        )
+def _ensure_no_google_live_conflict(start_utc: datetime, end_utc: datetime) -> None:
+    for busy_start, busy_end in _get_google_live_busy_ranges(start_utc, end_utc):
+        if has_time_overlap(start_utc, end_utc, busy_start, busy_end):
+            raise api_error(409, BookingApiErrorCode.GOOGLE_SLOT_CONFLICT, "Slot conflicts with current Google calendar data")
 
 
 def _create_google_calendar_event(
@@ -417,6 +356,31 @@ def slots_search(payload: SlotSearchRequest, db: Session = Depends(get_db)) -> S
     _ensure_booking_backend_configured()
 
     slots = search_slots(db, payload.start_iso, payload.end_iso, payload.duration_minutes, payload.timezone)
+    zone = ZoneInfo(payload.timezone)
+    window_start = payload.start_iso
+    if window_start.tzinfo is None:
+        window_start = window_start.replace(tzinfo=zone)
+    window_start = window_start.astimezone(timezone.utc)
+    window_end = payload.end_iso
+    if window_end.tzinfo is None:
+        window_end = window_end.replace(tzinfo=zone)
+    window_end = min(window_end.astimezone(timezone.utc), window_start + timedelta(days=settings.max_window_days))
+    if window_end <= window_start:
+        return SlotSearchResult(timezone=payload.timezone, duration_minutes=payload.duration_minutes, slots=[])
+    busy_ranges = _get_google_live_busy_ranges(
+        window_start.astimezone(timezone.utc), window_end.astimezone(timezone.utc),
+    )
+    slots = [
+        item for item in slots
+        if not any(
+            has_time_overlap(
+                datetime.fromisoformat(item["start_iso"]),
+                datetime.fromisoformat(item["end_iso"]),
+                busy_start, busy_end,
+            )
+            for busy_start, busy_end in busy_ranges
+        )
+    ]
     return SlotSearchResult(
         timezone=payload.timezone,
         duration_minutes=payload.duration_minutes,
@@ -447,7 +411,7 @@ def create_reservation(payload: ReservationCreateRequest, db: Session = Depends(
     if _has_local_reservation_overlap(db, start_utc, end_utc):
         raise api_error(409, BookingApiErrorCode.SLOT_RESERVED, "Slot is already reserved")
 
-    # Optional live Google check catches manual calendar changes between polling runs.
+    # Mandatory recheck also catches changes since the visitor loaded the slot list.
     _ensure_no_google_live_conflict(start_utc, end_utc)
 
     reference = "RBK-" + secrets.token_hex(5).upper()

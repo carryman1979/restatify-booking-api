@@ -28,13 +28,9 @@ Dadurch bleibt die geschäftslogische Terminverarbeitung zentral in der API und 
 
 ## Aktueller Status
 
-Die API bleibt zentrales Backend-System fuer Slot-Suche, Reservierungen und Sync-Logik. Fuer den aktuellen Stand wurde ein operativer Smoke-Test-Workflow ergänzt.
+Die API bleibt zentrales Backend-System fuer Slot-Suche, Reservierungen und Sync-Logik. Version 1.2.5 korrigiert die Live-Verfügbarkeitsprüfungen für Google Kalender und ergänzt Regressionstests.
 
-Release-Prep Status (2026-05-30):
-
-- Dokumentation und Release-Notizen fuer den koordinierten Multi-Repo-Rollout auf Version 1.2.4 synchronisiert.
-- Release-Artefakt fuer 1.2.4 wurde neu gebaut und als aktueller Stand veroeffentlicht.
-
+- [Release 1.2.5](Release-1.2.5)
 - [Release 1.2.4](Release-1.2.4)
 - [Release 1.2.3](Release-1.2.3)
 - [Release 1.2.2](Release-1.2.2)

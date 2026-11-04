@@ -2,12 +2,12 @@
 
 Small self-hosted API for searching free slots and creating reservations.
 
-Version: 1.2.4
+Version: 1.2.5
 
 ## Features
 
 - API key protected endpoints
-- Slot search based on workday hours and existing reservations
+- Slot search based on workday hours, existing reservations and live Google availability
 - Reservation creation with conflict checks
 - Automatic Google Calendar event creation after successful reservation
 - Cancellation tokens with API-backed reservation cancellation
@@ -18,7 +18,7 @@ Version: 1.2.4
 - Optional holiday calendar type that is treated as hard blocker
 - Polling-based double-booking conflict detection with deduplicated alert memory
 - Optional email notification for newly detected conflicts
-- Reservation-time live Google FreeBusy recheck to reduce race-condition collisions
+- Mandatory reservation-time live Google FreeBusy recheck to reduce race-condition collisions
 - Optional explicit write-target calendar selection
 
 ## Compatibility
@@ -54,6 +54,30 @@ The service account must have at least "Make changes to events" access on the ta
 When a reservation is cancelled via `POST /v1/reservations/cancel`, the API marks the reservation as
 `cancelled`, stores cancellation reason/message, and deletes the Google Calendar event if event metadata
 is available.
+
+## Live availability checks
+
+- Both slot search and reservation creation require working Google credentials and access to every configured calendar.
+- Search fetches live availability for the bounded search window, not once per candidate slot. Reservation creation fetches it again immediately before creating the Google event.
+- Every overlapping Google FreeBusy interval blocks booking, including busy all-day events. Adjacent intervals remain bookable.
+- Missing calendars, malformed responses, credential errors and unavailable Google services return HTTP `503` (`BACKEND_UNAVAILABLE`), never an unchecked list of free slots or a successful reservation.
+- A confirmed live overlap returns HTTP `409` (`GOOGLE_SLOT_CONFLICT`) without creating a reservation or Google event.
+- General calendars respect Google's **Busy/Free** setting: events marked **Free** do not block. After converting an all-day event to a timed event, verify that it is marked **Busy**.
+- Holiday calendars remain hard blockers, including transparent events; all Events API pages are read.
+- Cron sync validates all calendar responses before replacing cached busy windows. Incomplete responses leave the previous cache unchanged.
+- Live checks reduce stale-data collisions but cannot make Google edits and local reservations one atomic transaction.
+
+Deploy these changes to the **Booking API and sync worker**. Updating only the WordPress plugin does not update this backend logic. No plugin API-contract or database-schema change is required.
+
+### Regression tests
+
+With the dependencies from `requirements.txt` installed (Python 3.11):
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+Tests use mocked Google services and an isolated in-memory database; they do not create real calendar events.
 
 ## Google reservation write env vars
 
@@ -175,19 +199,22 @@ This API already exposes the contract needed by the WordPress booking plugin and
 
 ## Release packaging
 
-Create a release archive from repository root:
+Create the release archive from repository root. Exclude local environment files,
+credentials/configuration, databases, virtual environments, caches, Git metadata,
+and any prior release archives:
 
 ```bash
-tar -czf release/restatify-booking-api-1.2.3.tar.gz --exclude='.git' .
+tar -czf release/restatify-booking-api-1.2.5.tar.gz \
+  --exclude='.git' \
+  --exclude='.env' --exclude='.env.*' --exclude='.env.local*' \
+  --exclude='*.db*' --exclude='*.sqlite*' \
+  --exclude='sync-config.json' --exclude='sync-state.json' \
+  --exclude='.venv' --exclude='venv' --exclude='__pycache__' \
+  --exclude='*.pyc' --exclude='.pytest_cache' --exclude='.mypy_cache' \
+  --exclude='gitleaks-*' --exclude='release/*.tar*' --exclude='release/*.zip' .
 ```
 
-Recommended current artifact:
+The safe `.env.example` template is intentionally excluded with other `.env.*` files;
+create it separately from the repository when preparing a deployment.
 
-- `release/restatify-booking-api-1.2.3.tar.gz`
-
-## Release-prep status (2026-05-30)
-
-- No version bump: release prep remains on `1.2.3`.
-- README/wiki/release-note set refreshed for coordinated multi-repo rollout.
-- Local release artifact rebuilt and kept aligned with current maintenance branch state.
-
+The current release artifact is `release/restatify-booking-api-1.2.5.tar.gz`.
